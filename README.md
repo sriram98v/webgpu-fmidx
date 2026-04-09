@@ -1,5 +1,7 @@
 # webgpu-fmidx
 
+[![Built with Anthropic](https://img.shields.io/badge/Built%20with-Anthropic-191919?logo=anthropic&logoColor=white)](https://www.anthropic.com)
+
 GPU-accelerated FM-index construction for DNA sequences, targeting WebGPU via `wgpu`.
 
 Builds a full FM-index (suffix array → BWT → C array → Occ table) on the GPU using
