@@ -13,6 +13,11 @@ export default defineConfig({
       "Cross-Origin-Embedder-Policy": "require-corp",
     },
   },
+  build: {
+    // Top-level await (used by wasm-bindgen init + WebGPU calls) requires
+    // a modern target. esnext lets esbuild pass it through unchanged.
+    target: "esnext",
+  },
   optimizeDeps: {
     // Don't bundle the WASM package — it is loaded dynamically
     exclude: ["webgpu-fmidx"],
