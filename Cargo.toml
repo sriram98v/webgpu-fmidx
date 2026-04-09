@@ -1,0 +1,55 @@
+[package]
+name = "webgpu-fmidx"
+version = "0.1.0"
+edition = "2021"
+description = "GPU-accelerated FM-index construction for DNA sequences via WebGPU"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["cpu"]
+cpu = []
+gpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster", "dep:futures-channel"]
+wasm = ["gpu", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys", "dep:web-sys"]
+
+[dependencies]
+thiserror = "2"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+bincode = "1"
+
+# GPU (optional)
+wgpu = { version = "24", optional = true }
+bytemuck = { version = "1", features = ["derive"], optional = true }
+pollster = { version = "0.4", optional = true }
+futures-channel = { version = "0.3", optional = true }
+
+# WASM (optional)
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+js-sys = { version = "0.3", optional = true }
+web-sys = { version = "0.3", optional = true, features = ["console"] }
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz", "--enable-mutable-globals"]
+
+[profile.release]
+opt-level = "z"   # Optimize for size in release builds
+lto = true
+codegen-units = 1
+
+[dev-dependencies]
+proptest = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+pollster = "0.4"
+rand = "0.9"
+
+[[bench]]
+name = "construction"
+harness = false
+
+[[bench]]
+name = "query"
+harness = false

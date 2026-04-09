@@ -1,0 +1,3 @@
+[target.wasm32-unknown-unknown]
+# Required for WebGPU access via web-sys unstable APIs (navigator.gpu, GPUDevice, etc.)
+rustflags = ["--cfg=web_sys_unstable_apis"]

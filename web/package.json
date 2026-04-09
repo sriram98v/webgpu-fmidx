@@ -1,0 +1,16 @@
+{
+  "name": "webgpu-fmidx-demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc && vite build",
+    "dev": "vite",
+    "preview": "vite preview",
+    "build-wasm": "cd .. && cargo build --target wasm32-unknown-unknown --features wasm --release && wasm-bindgen target/wasm32-unknown-unknown/release/webgpu_fmidx.wasm --target web --out-dir web/pkg"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "vite": "^5.2.8"
+  }
+}

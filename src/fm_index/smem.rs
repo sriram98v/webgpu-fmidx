@@ -1,0 +1,372 @@
+use crate::fm_index::bidir::BidirInterval;
+use crate::fm_index::bidir_index::BidirFmIndex;
+
+/// A Maximal Exact Match (MEM) between a query and the indexed reference.
+///
+/// A MEM is a substring of the query that:
+/// 1. Occurs at least once in the reference.
+/// 2. Is **left-maximal**: extending one base to the left removes all occurrences.
+/// 3. Is **right-maximal**: extending one base to the right removes all occurrences.
+///
+/// A Super-Maximal Exact Match (SMEM) additionally satisfies:
+/// 4. No other MEM with the same right boundary has a larger count.
+///
+/// In practice `find_smems` finds all MEMs that are simultaneously left- and
+/// right-maximal (i.e., SMEMs in the BWA-MEM sense).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mem {
+    /// Start position in the query (0-based, inclusive).
+    pub query_start: usize,
+    /// End position in the query (0-based, exclusive).
+    pub query_end: usize,
+    /// Number of occurrences in the reference text.
+    pub match_count: u32,
+    /// Reference text positions (populated only when `locate = true`).
+    pub positions: Vec<u32>,
+}
+
+impl Mem {
+    /// Length of the matched pattern in the query.
+    pub fn len(&self) -> usize {
+        self.query_end - self.query_start
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.query_start >= self.query_end
+    }
+}
+
+impl BidirFmIndex {
+    /// Find all Super-Maximal Exact Matches (SMEMs) between `query` and the
+    /// indexed reference.
+    ///
+    /// # Algorithm
+    ///
+    /// For each query position `i` (0 .. query.len()):
+    /// 1. **Right extension**: start from `i`, extend right one base at a time
+    ///    via [`BidirInterval::extend_right`] until the interval collapses or
+    ///    the query ends.  This yields the unique right-maximal match `[i, j)`.
+    /// 2. **Left-maximality check**: try extending the resulting interval one
+    ///    step to the left by `query[i-1]`.  If that extension is still
+    ///    non-empty, `[i, j)` can be extended to the left → not left-maximal →
+    ///    skip it.
+    /// 3. Accept seeds that are ≥ `min_len` and both left- and right-maximal.
+    ///
+    /// Complexity: O(|query|² × α) where α = ALPHABET_SIZE = 5.
+    /// In practice much better: once a long SMEM is found the inner loop
+    /// advances to the SMEM's right boundary.
+    ///
+    /// # Parameters
+    ///
+    /// - `query`: encoded DNA bases (values 1–4; 0 = sentinel, should not appear).
+    /// - `min_len`: discard matches shorter than this (must be ≥ 1).
+    /// - `locate`: if `true`, populate `Mem::positions` with reference positions.
+    ///
+    /// # Returns
+    ///
+    /// SMEMs in order of increasing `query_start`.  Duplicate `(start, end)` pairs
+    /// are deduplicated.
+    pub fn find_smems(&self, query: &[u8], min_len: usize, locate: bool) -> Vec<Mem> {
+        if query.is_empty() || min_len == 0 {
+            return vec![];
+        }
+
+        let n = query.len();
+        let mut smems: Vec<Mem> = Vec::new();
+        let mut i = 0;
+
+        while i < n {
+            let (mem_opt, next_i) = self.smem_from(query, i, min_len, locate);
+
+            if let Some(mem) = mem_opt {
+                // Advance past the SMEM's right boundary to avoid finding
+                // redundant sub-MEMs that are dominated by this one.
+                let end = mem.query_end;
+                smems.push(mem);
+                i = end;
+            } else {
+                i = next_i;
+            }
+        }
+
+        smems
+    }
+
+    /// Find all MEMs (not just super-maximal) of length ≥ `min_len`.
+    ///
+    /// Unlike `find_smems`, this does NOT advance past the right boundary after
+    /// finding a MEM, so overlapping MEMs from different starting positions are
+    /// all reported.
+    ///
+    /// Complexity: O(|query|² × α).
+    pub fn find_mems(&self, query: &[u8], min_len: usize, locate: bool) -> Vec<Mem> {
+        if query.is_empty() || min_len == 0 {
+            return vec![];
+        }
+
+        let n = query.len();
+        let mut mems: Vec<Mem> = Vec::new();
+        // Deduplicate by (start, end) since multiple i values can produce the same MEM.
+        let mut seen: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+
+        for i in 0..n {
+            let (mem_opt, _) = self.smem_from(query, i, min_len, locate);
+            if let Some(mem) = mem_opt {
+                let key = (mem.query_start, mem.query_end);
+                if seen.insert(key) {
+                    mems.push(mem);
+                }
+            }
+        }
+
+        mems.sort_by_key(|m| (m.query_start, m.query_end));
+        mems
+    }
+
+    /// Find the right-maximal, left-maximal seed starting at query position `i`.
+    ///
+    /// Returns `(Some(Mem), next_i)` on success where `next_i = i + 1` (the
+    /// `find_smems` outer loop may choose a larger advance).
+    /// Returns `(None, i + 1)` when no valid seed exists at `i`.
+    fn smem_from(
+        &self,
+        query: &[u8],
+        i: usize,
+        min_len: usize,
+        locate: bool,
+    ) -> (Option<Mem>, usize) {
+        let n = query.len();
+        let mut iv = self.full_interval();
+        let mut j = i;
+        let mut last_valid: Option<(BidirInterval, usize)> = None; // (interval, end_exclusive)
+
+        // Right extension phase: uses the reverse index.
+        while j < n {
+            match iv.extend_right(query[j], &self.rev) {
+                Some(ext) => {
+                    iv = ext;
+                    j += 1;
+                    last_valid = Some((iv, j));
+                }
+                None => break,
+            }
+        }
+
+        let (valid_iv, end) = match last_valid {
+            Some(v) => v,
+            None => return (None, i + 1), // no match at all for query[i]
+        };
+
+        let len = end - i;
+        if len < min_len {
+            return (None, i + 1);
+        }
+
+        // Left-maximality check: uses the forward index.
+        let left_maximal = if i == 0 {
+            true
+        } else {
+            // If extending the interval one step to the left by query[i-1] succeeds,
+            // the match is NOT left-maximal.
+            valid_iv.extend_left(query[i - 1], &self.fwd).is_none()
+        };
+
+        if !left_maximal {
+            return (None, i + 1);
+        }
+
+        let positions = if locate {
+            self.locate_interval(&valid_iv)
+        } else {
+            Vec::new()
+        };
+
+        let mem = Mem {
+            query_start: i,
+            query_end: end,
+            match_count: valid_iv.size(),
+            positions,
+        };
+
+        (Some(mem), i + 1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::alphabet::{encode_char, DnaSequence};
+    use crate::fm_index::{FmIndex, FmIndexConfig};
+
+    fn encode(s: &str) -> Vec<u8> {
+        s.chars().map(|c| encode_char(c).unwrap()).collect()
+    }
+
+    fn bidir(s: &str) -> BidirFmIndex {
+        let config = FmIndexConfig {
+            sa_sample_rate: 1,
+            use_gpu: false,
+        };
+        BidirFmIndex::build_cpu(&[DnaSequence::from_str(s).unwrap()], &config).unwrap()
+    }
+
+    /// Brute-force MEM finder for reference: finds all substrings of `query` that
+    /// occur in `reference` and are both left- and right-maximal.
+    fn brute_force_mems(reference: &str, query: &str, min_len: usize) -> Vec<(usize, usize)> {
+        let n = query.len();
+        let mut mems: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+
+        for start in 0..n {
+            for end in start + min_len..=n {
+                let sub = &query[start..end];
+                if !reference.contains(sub) {
+                    continue;
+                }
+                // Check right-maximal: can't extend right.
+                let right_maximal = end == n || !reference.contains(&query[start..end + 1]);
+                // Check left-maximal: can't extend left.
+                let left_maximal = start == 0 || !reference.contains(&query[start - 1..end]);
+                if right_maximal && left_maximal {
+                    mems.insert((start, end));
+                }
+            }
+        }
+
+        let mut v: Vec<_> = mems.into_iter().collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn no_smems_when_query_absent() {
+        let idx = bidir("AAAA");
+        let query = encode("CCCC");
+        let smems = idx.find_smems(&query, 1, false);
+        assert!(smems.is_empty());
+    }
+
+    #[test]
+    fn single_smem_exact_match() {
+        let idx = bidir("ACGTACGT");
+        let query = encode("ACGT");
+        let smems = idx.find_smems(&query, 1, false);
+        assert_eq!(smems.len(), 1);
+        assert_eq!(smems[0].query_start, 0);
+        assert_eq!(smems[0].query_end, 4);
+        assert_eq!(smems[0].match_count, 2); // "ACGT" appears twice in reference
+    }
+
+    #[test]
+    fn smem_locate_returns_correct_positions() {
+        let idx = bidir("ACGTACGT");
+        let query = encode("ACGT");
+        let smems = idx.find_smems(&query, 1, true);
+        assert_eq!(smems.len(), 1);
+        let mut positions = smems[0].positions.clone();
+        positions.sort();
+        assert_eq!(positions, vec![0, 4]);
+    }
+
+    #[test]
+    fn min_len_filter() {
+        let idx = bidir("ACGTACGT");
+        let query = encode("A");
+        // "A" is length 1; with min_len=2, it should be filtered out.
+        let smems = idx.find_smems(&query, 2, false);
+        assert!(smems.is_empty());
+    }
+
+    #[test]
+    fn smems_match_brute_force() {
+        let reference = "ACGTTAGCCAGTACGT";
+        let query_str = "CGTTAGC";
+        let idx = bidir(reference);
+        let query = encode(query_str);
+
+        let smems = idx.find_smems(&query, 1, false);
+        let smem_pairs: Vec<(usize, usize)> =
+            smems.iter().map(|m| (m.query_start, m.query_end)).collect();
+
+        let expected = brute_force_mems(reference, query_str, 1);
+
+        assert_eq!(
+            smem_pairs, expected,
+            "SMEMs differ from brute force.\nGot:      {:?}\nExpected: {:?}",
+            smem_pairs, expected
+        );
+    }
+
+    #[test]
+    fn find_mems_superset_of_smems() {
+        let reference = "ACGTTAGCCAGTACGT";
+        let query_str = "CGTTAGC";
+        let idx = bidir(reference);
+        let query = encode(query_str);
+
+        let smems = idx.find_smems(&query, 1, false);
+        let mems = idx.find_mems(&query, 1, false);
+
+        // Every SMEM should appear in the MEMs list.
+        for smem in &smems {
+            assert!(
+                mems.iter()
+                    .any(|m| m.query_start == smem.query_start && m.query_end == smem.query_end),
+                "SMEM {:?} not found in MEMs list",
+                smem
+            );
+        }
+    }
+
+    #[test]
+    fn smems_all_positions_valid() {
+        let reference = "ACGTTAGCCAGTACGT";
+        let query_str = "AGTACGT";
+        let idx = bidir(reference);
+        let query_encoded = encode(query_str);
+
+        let smems = idx.find_smems(&query_encoded, 1, true);
+        for mem in &smems {
+            let pattern = &query_str[mem.query_start..mem.query_end];
+            for &pos in &mem.positions {
+                let pos = pos as usize;
+                assert!(
+                    pos + pattern.len() <= reference.len(),
+                    "position {} out of bounds",
+                    pos
+                );
+                assert_eq!(
+                    &reference[pos..pos + pattern.len()],
+                    pattern,
+                    "wrong match at pos {}: expected '{}' got '{}'",
+                    pos,
+                    pattern,
+                    &reference[pos..pos + pattern.len()]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn smem_count_matches_unidirectional_count() {
+        let reference = "ACGTACGTACGT";
+        let idx = bidir(reference);
+        let uni_config = FmIndexConfig {
+            sa_sample_rate: 1,
+            use_gpu: false,
+        };
+        let uni =
+            FmIndex::build_cpu(&[DnaSequence::from_str(reference).unwrap()], &uni_config).unwrap();
+
+        let query = encode("ACGT");
+        let smems = idx.find_smems(&query, 1, false);
+        // "ACGT" occurs 3 times — should be reflected in match_count
+        assert_eq!(smems[0].match_count, uni.count(&query));
+    }
+
+    #[test]
+    fn empty_query_returns_empty() {
+        let idx = bidir("ACGT");
+        assert!(idx.find_smems(&[], 1, false).is_empty());
+        assert!(idx.find_mems(&[], 1, false).is_empty());
+    }
+}
