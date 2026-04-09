@@ -1,0 +1,77 @@
+name: Deploy Demo
+
+on:
+  push:
+    branches: [main]
+
+# Allow the job to push to the web branch
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    name: Build and deploy demo
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Rust / WASM build ──────────────────────────────────────────────────
+      - name: Install Rust (stable + wasm32 target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-wasm-
+
+      - name: Install wasm-bindgen-cli
+        run: cargo install wasm-bindgen-cli --locked
+
+      - name: Build WASM
+        run: |
+          cargo build \
+            --target wasm32-unknown-unknown \
+            --features wasm \
+            --release
+          wasm-bindgen \
+            target/wasm32-unknown-unknown/release/webgpu_fmidx.wasm \
+            --target web \
+            --out-dir web/pkg
+
+      # ── Node / Vite build ──────────────────────────────────────────────────
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install Node dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Build demo
+        working-directory: web
+        # Set VITE_BASE_URL so Vite prefixes assets with /<repo-name>/
+        # which is where GitHub Pages serves the site.
+        env:
+          VITE_BASE_URL: /${{ github.event.repository.name }}/
+        run: npx vite build
+
+      # ── Deploy to web branch ───────────────────────────────────────────────
+      - name: Deploy to web branch
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: web
+          publish_dir: web/dist
+          # Keep a clean branch — no git history bloat from built assets
+          force_orphan: true

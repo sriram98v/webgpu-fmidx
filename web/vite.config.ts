@@ -3,6 +3,9 @@ import { defineConfig } from "vite";
 export default defineConfig({
   // Allow serving the WASM file with correct MIME type
   assetsInclude: ["**/*.wasm"],
+  // In CI the workflow sets VITE_BASE_URL to /<repo-name>/ so that
+  // GitHub Pages serves assets from the correct path. Locally defaults to /.
+  base: process.env.VITE_BASE_URL ?? "/",
   server: {
     headers: {
       // Required for SharedArrayBuffer / WebGPU in some browsers
