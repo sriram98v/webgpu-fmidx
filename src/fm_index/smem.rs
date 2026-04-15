@@ -21,8 +21,9 @@ pub struct Mem {
     pub query_end: usize,
     /// Number of occurrences in the reference text.
     pub match_count: u32,
-    /// Reference text positions (populated only when `locate = true`).
-    pub positions: Vec<u32>,
+    /// Reference positions (populated only when `locate = true`).
+    /// Each entry is `(sequence_id, position_within_sequence)`.
+    pub positions: Vec<(String, u32)>,
 }
 
 impl Mem {
@@ -264,7 +265,10 @@ mod tests {
         assert_eq!(smems.len(), 1);
         let mut positions = smems[0].positions.clone();
         positions.sort();
-        assert_eq!(positions, vec![0, 4]);
+        assert_eq!(
+            positions,
+            vec![("seq_0".to_string(), 0), ("seq_0".to_string(), 4)]
+        );
     }
 
     #[test]
@@ -327,8 +331,8 @@ mod tests {
         let smems = idx.find_smems(&query_encoded, 1, true);
         for mem in &smems {
             let pattern = &query_str[mem.query_start..mem.query_end];
-            for &pos in &mem.positions {
-                let pos = pos as usize;
+            for (_, pos) in &mem.positions {
+                let pos = *pos as usize;
                 assert!(
                     pos + pattern.len() <= reference.len(),
                     "position {} out of bounds",

@@ -42,6 +42,8 @@ pub fn decode_char(code: u8) -> Option<char> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DnaSequence {
     bases: Vec<u8>,
+    /// FASTA header (without leading `>`). Empty string if not provided.
+    header: String,
 }
 
 impl DnaSequence {
@@ -61,12 +63,24 @@ impl DnaSequence {
                 _ => return Err(FmIndexError::InvalidCharacter(ch, i)),
             }
         }
-        Ok(Self { bases })
+        Ok(Self { bases, header: String::new() })
+    }
+
+    /// Parse from a string of ACGT characters with a FASTA header.
+    pub fn from_str_with_header(s: &str, header: &str) -> Result<Self, FmIndexError> {
+        let mut seq = Self::from_str(s)?;
+        seq.header = header.to_string();
+        Ok(seq)
     }
 
     /// Create from pre-encoded bases (no validation).
     pub fn from_encoded(bases: Vec<u8>) -> Self {
-        Self { bases }
+        Self { bases, header: String::new() }
+    }
+
+    /// Returns the FASTA header (without `>`), or empty string if not set.
+    pub fn header(&self) -> &str {
+        &self.header
     }
 
     /// Returns the number of bases in the sequence.

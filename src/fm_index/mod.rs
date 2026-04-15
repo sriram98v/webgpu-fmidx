@@ -44,6 +44,8 @@ pub struct FmIndex {
     pub(crate) num_sequences: u32,
     /// Cumulative sequence lengths for mapping positions back to sequences.
     pub(crate) seq_boundaries: Vec<u32>,
+    /// FASTA headers for each sequence (index-parallel with seq_boundaries).
+    pub(crate) seq_headers: Vec<String>,
 }
 
 impl FmIndex {
@@ -59,6 +61,15 @@ impl FmIndex {
         let (text, seq_boundaries) = alphabet::concatenate_sequences(sequences)?;
         let text_len = text.len() as u32;
         let num_sequences = sequences.len() as u32;
+
+        let seq_headers: Vec<String> = sequences
+            .iter()
+            .enumerate()
+            .map(|(i, seq)| {
+                let h = seq.header();
+                if h.is_empty() { format!("seq_{}", i) } else { h.to_string() }
+            })
+            .collect();
 
         // Build suffix array
         let sa = build_suffix_array(&text);
@@ -83,6 +94,7 @@ impl FmIndex {
             text_len,
             num_sequences,
             seq_boundaries,
+            seq_headers,
         })
     }
 
@@ -115,6 +127,15 @@ impl FmIndex {
         let text_len = text.len() as u32;
         let num_sequences = sequences.len() as u32;
 
+        let seq_headers: Vec<String> = sequences
+            .iter()
+            .enumerate()
+            .map(|(i, seq)| {
+                let h = seq.header();
+                if h.is_empty() { format!("seq_{}", i) } else { h.to_string() }
+            })
+            .collect();
+
         let ctx = GpuContext::new().await?;
         let sa_pipelines = SaPipelines::new(&ctx);
         let bwt_pipelines = BwtPipelines::new(&ctx);
@@ -143,6 +164,7 @@ impl FmIndex {
             text_len,
             num_sequences,
             seq_boundaries,
+            seq_headers,
         })
     }
 

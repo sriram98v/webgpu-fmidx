@@ -10,14 +10,15 @@ fn to_js_err(e: impl std::fmt::Display) -> JsValue {
 
 /// Parse a multi-line FASTA or plain-sequence string into a list of DNA sequences.
 ///
-/// - Lines starting with `>` are treated as FASTA headers and skipped.
+/// - Lines starting with `>` are treated as FASTA headers (stored in `DnaSequence`).
 /// - Blank lines are skipped.
 /// - Everything else is treated as sequence data (may span multiple lines per entry).
 ///
 /// Returns one `DnaSequence` per FASTA record (or one per non-blank line for plain input).
 fn parse_fasta(input: &str) -> Result<Vec<DnaSequence>, JsValue> {
     let mut sequences: Vec<DnaSequence> = Vec::new();
-    let mut current: Option<String> = None;
+    let mut current_seq: Option<String> = None;
+    let mut current_header: Option<String> = None;
 
     for line in input.lines() {
         let line = line.trim();
@@ -26,14 +27,19 @@ fn parse_fasta(input: &str) -> Result<Vec<DnaSequence>, JsValue> {
         }
         if line.starts_with('>') {
             // Flush previous sequence.
-            if let Some(seq_str) = current.take() {
+            if let Some(seq_str) = current_seq.take() {
                 if !seq_str.is_empty() {
-                    sequences.push(DnaSequence::from_str(&seq_str).map_err(to_js_err)?);
+                    let header = current_header.take().unwrap_or_default();
+                    sequences.push(
+                        DnaSequence::from_str_with_header(&seq_str, &header)
+                            .map_err(to_js_err)?,
+                    );
                 }
             }
-            current = Some(String::new());
+            current_header = Some(line[1..].trim().to_string());
+            current_seq = Some(String::new());
         } else {
-            match current.as_mut() {
+            match current_seq.as_mut() {
                 Some(buf) => buf.push_str(line),
                 None => {
                     // Plain (non-FASTA) input: each non-blank line is its own sequence.
@@ -44,9 +50,12 @@ fn parse_fasta(input: &str) -> Result<Vec<DnaSequence>, JsValue> {
     }
 
     // Flush last FASTA record.
-    if let Some(seq_str) = current.take() {
+    if let Some(seq_str) = current_seq.take() {
         if !seq_str.is_empty() {
-            sequences.push(DnaSequence::from_str(&seq_str).map_err(to_js_err)?);
+            let header = current_header.take().unwrap_or_default();
+            sequences.push(
+                DnaSequence::from_str_with_header(&seq_str, &header).map_err(to_js_err)?,
+            );
         }
     }
 
@@ -159,12 +168,21 @@ impl FmIndexHandle {
         Ok(self.index.count(&encoded))
     }
 
-    /// Locate all occurrence positions of `pattern`.
+    /// Locate all occurrences of `pattern`.
     ///
-    /// Returns a `Uint32Array` of text positions (0-based, in concatenated text).
-    pub fn locate(&self, pattern: &str) -> Result<Vec<u32>, JsValue> {
+    /// Returns a JS `Array` of `[sequenceId, position]` pairs, where `sequenceId`
+    /// is the FASTA header string and `position` is 0-based within that sequence.
+    pub fn locate(&self, pattern: &str) -> Result<js_sys::Array, JsValue> {
         let encoded = encode_pattern(pattern)?;
-        Ok(self.index.locate(&encoded))
+        let hits = self.index.locate(&encoded);
+        let result = js_sys::Array::new_with_length(hits.len() as u32);
+        for (i, (seq_id, pos)) in hits.into_iter().enumerate() {
+            let pair = js_sys::Array::new_with_length(2);
+            pair.set(0, wasm_bindgen::JsValue::from_str(&seq_id));
+            pair.set(1, wasm_bindgen::JsValue::from_f64(pos as f64));
+            result.set(i as u32, pair.into());
+        }
+        Ok(result)
     }
 
     /// Total length of the indexed text (including per-sequence sentinel characters).

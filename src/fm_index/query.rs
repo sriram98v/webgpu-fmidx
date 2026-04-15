@@ -14,17 +14,26 @@ impl FmIndex {
 
     /// Locate all occurrences of a pattern in the indexed text.
     ///
-    /// Returns the text positions where the pattern occurs.
+    /// Returns `(sequence_id, position)` tuples where `sequence_id` is the FASTA
+    /// header of the matching sequence and `position` is 0-based within that sequence.
     ///
     /// Time: O(m + occ * k) where m = pattern length, occ = number of occurrences,
     /// k = SA sample rate.
-    pub fn locate(&self, pattern: &[u8]) -> Vec<u32> {
+    pub fn locate(&self, pattern: &[u8]) -> Vec<(String, u32)> {
         let (lo, hi) = self.backward_search(pattern);
         if lo >= hi {
             return vec![];
         }
 
-        (lo..hi).map(|i| self.resolve_sa(i)).collect()
+        (lo..hi)
+            .map(|i| {
+                let text_pos = self.resolve_sa(i);
+                let (seq_idx, pos_in_seq) = self
+                    .map_position(text_pos)
+                    .expect("resolved SA position must be within text bounds");
+                (self.seq_headers[seq_idx as usize].clone(), pos_in_seq)
+            })
+            .collect()
     }
 
     /// Backward search: find the SA interval [lo, hi) for the pattern.
@@ -167,14 +176,17 @@ mod tests {
         let idx = make_index("ACGTACGT");
         let mut positions = idx.locate(&encode_pattern("ACGT"));
         positions.sort();
-        assert_eq!(positions, vec![0, 4]);
+        assert_eq!(
+            positions,
+            vec![("seq_0".to_string(), 0), ("seq_0".to_string(), 4)]
+        );
     }
 
     #[test]
     fn test_locate_single_occurrence() {
         let idx = make_index("ACGTACGT");
         let positions = idx.locate(&encode_pattern("ACGTACGT"));
-        assert_eq!(positions, vec![0]);
+        assert_eq!(positions, vec![("seq_0".to_string(), 0)]);
     }
 
     #[test]
@@ -194,8 +206,8 @@ mod tests {
         let encoded_pattern = encode_pattern(pattern);
         let positions = idx.locate(&encoded_pattern);
 
-        for &pos in &positions {
-            let pos = pos as usize;
+        for (_, pos) in &positions {
+            let pos = *pos as usize;
             assert_eq!(
                 &encoded_text[pos..pos + pattern.len()],
                 encoded_pattern.as_slice(),
@@ -229,7 +241,14 @@ mod tests {
         let idx = FmIndex::build_cpu(&[seq], &config).unwrap();
         let mut positions = idx.locate(&encode_pattern("ACGT"));
         positions.sort();
-        assert_eq!(positions, vec![0, 4, 8]);
+        assert_eq!(
+            positions,
+            vec![
+                ("seq_0".to_string(), 0),
+                ("seq_0".to_string(), 4),
+                ("seq_0".to_string(), 8),
+            ]
+        );
     }
 
     #[test]

@@ -126,12 +126,20 @@ impl BidirFmIndex {
         iv.size()
     }
 
-    /// Locate all text positions for the pattern represented by `iv`.
+    /// Locate all occurrences for the pattern represented by `iv`.
     ///
+    /// Returns `(sequence_id, position_within_sequence)` tuples.
     /// Uses the forward SA samples; time is O(occ × sample_rate).
-    pub fn locate_interval(&self, iv: &BidirInterval) -> Vec<u32> {
+    pub fn locate_interval(&self, iv: &BidirInterval) -> Vec<(String, u32)> {
         (iv.fwd_lo..iv.fwd_hi)
-            .map(|i| self.fwd.resolve_sa(i))
+            .map(|i| {
+                let text_pos = self.fwd.resolve_sa(i);
+                let (seq_idx, pos_in_seq) = self
+                    .fwd
+                    .map_position(text_pos)
+                    .expect("resolved SA position must be within text bounds");
+                (self.fwd.seq_headers[seq_idx as usize].clone(), pos_in_seq)
+            })
             .collect()
     }
 
@@ -294,7 +302,10 @@ mod tests {
         }
         let mut positions = idx.locate_interval(&iv);
         positions.sort();
-        assert_eq!(positions, vec![0, 4]);
+        assert_eq!(
+            positions,
+            vec![("seq_0".to_string(), 0), ("seq_0".to_string(), 4)]
+        );
     }
 
     #[test]

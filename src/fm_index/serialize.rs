@@ -18,6 +18,7 @@ impl FmIndex {
             text_len: self.text_len,
             num_sequences: self.num_sequences,
             seq_boundaries: &self.seq_boundaries,
+            seq_headers: &self.seq_headers,
         };
         bincode::serialize(&serializable).map_err(|e| FmIndexError::SerializeError(e.to_string()))
     }
@@ -34,6 +35,7 @@ impl FmIndex {
             text_len: deserialized.text_len,
             num_sequences: deserialized.num_sequences,
             seq_boundaries: deserialized.seq_boundaries,
+            seq_headers: deserialized.seq_headers,
         })
     }
 }
@@ -47,6 +49,7 @@ struct SerializableFmIndex<'a> {
     text_len: u32,
     num_sequences: u32,
     seq_boundaries: &'a [u32],
+    seq_headers: &'a [String],
 }
 
 #[derive(serde::Deserialize)]
@@ -58,6 +61,7 @@ struct OwnedSerializableFmIndex {
     text_len: u32,
     num_sequences: u32,
     seq_boundaries: Vec<u32>,
+    seq_headers: Vec<String>,
 }
 
 #[cfg(test)]
@@ -93,8 +97,8 @@ mod tests {
 
             let mut orig_locs = original.locate(&p);
             let mut rest_locs = restored.locate(&p);
-            orig_locs.sort();
-            rest_locs.sort();
+            orig_locs.sort_by_key(|(_, pos)| *pos);
+            rest_locs.sort_by_key(|(_, pos)| *pos);
             assert_eq!(orig_locs, rest_locs, "locate mismatch for '{}'", pattern);
         }
     }

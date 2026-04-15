@@ -53,3 +53,7 @@ harness = false
 [[bench]]
 name = "query"
 harness = false
+
+[[bench]]
+name = "cpu_vs_gpu"
+harness = false
