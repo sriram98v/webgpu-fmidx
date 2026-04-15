@@ -38,8 +38,8 @@ fn locate_positions_are_valid() {
             let positions = idx.locate(&p);
 
             // Every returned position should be valid
-            for &pos in &positions {
-                let pos = pos as usize;
+            for (_, pos) in &positions {
+                let pos = *pos as usize;
                 if pos + pattern.len() <= encoded_text.len() {
                     assert_eq!(
                         &encoded_text[pos..pos + pattern.len()],
@@ -74,8 +74,11 @@ fn locate_matches_naive_positions() {
 
         for pattern in &["ACGT", "GT", "A", "GCC"] {
             let p = encode_pattern(pattern);
-            let mut fm_positions: Vec<usize> =
-                idx.locate(&p).into_iter().map(|x| x as usize).collect();
+            let mut fm_positions: Vec<usize> = idx
+                .locate(&p)
+                .into_iter()
+                .map(|(_, pos)| pos as usize)
+                .collect();
             fm_positions.sort();
 
             let naive_positions = naive_locate(text, pattern);

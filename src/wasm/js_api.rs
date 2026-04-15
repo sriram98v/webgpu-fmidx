@@ -31,8 +31,7 @@ fn parse_fasta(input: &str) -> Result<Vec<DnaSequence>, JsValue> {
                 if !seq_str.is_empty() {
                     let header = current_header.take().unwrap_or_default();
                     sequences.push(
-                        DnaSequence::from_str_with_header(&seq_str, &header)
-                            .map_err(to_js_err)?,
+                        DnaSequence::from_str_with_header(&seq_str, &header).map_err(to_js_err)?,
                     );
                 }
             }
@@ -53,9 +52,8 @@ fn parse_fasta(input: &str) -> Result<Vec<DnaSequence>, JsValue> {
     if let Some(seq_str) = current_seq.take() {
         if !seq_str.is_empty() {
             let header = current_header.take().unwrap_or_default();
-            sequences.push(
-                DnaSequence::from_str_with_header(&seq_str, &header).map_err(to_js_err)?,
-            );
+            sequences
+                .push(DnaSequence::from_str_with_header(&seq_str, &header).map_err(to_js_err)?);
         }
     }
 

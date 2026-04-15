@@ -67,7 +67,11 @@ impl FmIndex {
             .enumerate()
             .map(|(i, seq)| {
                 let h = seq.header();
-                if h.is_empty() { format!("seq_{}", i) } else { h.to_string() }
+                if h.is_empty() {
+                    format!("seq_{}", i)
+                } else {
+                    h.to_string()
+                }
             })
             .collect();
 
@@ -132,7 +136,11 @@ impl FmIndex {
             .enumerate()
             .map(|(i, seq)| {
                 let h = seq.header();
-                if h.is_empty() { format!("seq_{}", i) } else { h.to_string() }
+                if h.is_empty() {
+                    format!("seq_{}", i)
+                } else {
+                    h.to_string()
+                }
             })
             .collect();
 

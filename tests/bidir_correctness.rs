@@ -177,8 +177,8 @@ fn bidirectional_locate_positions_are_correct() {
     positions.sort();
 
     // Verify each position by comparing the original string (not raw bytes)
-    for &pos in &positions {
-        let pos = pos as usize;
+    for (_, pos) in &positions {
+        let pos = *pos as usize;
         assert!(
             pos + query_str.len() <= text.len(),
             "position {} out of bounds",
@@ -265,8 +265,8 @@ fn smem_positions_are_valid() {
     let smems = idx.find_smems(&query, 1, true);
     for mem in &smems {
         let pattern = &query_str[mem.query_start..mem.query_end];
-        for &pos in &mem.positions {
-            let pos = pos as usize;
+        for (_, pos) in &mem.positions {
+            let pos = *pos as usize;
             assert!(
                 pos + pattern.len() <= reference.len(),
                 "position {} out of bounds (ref len {})",

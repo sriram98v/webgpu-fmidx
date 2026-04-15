@@ -28,10 +28,8 @@ use webgpu_fmidx::suffix_array::cpu::build_suffix_array as cpu_build_sa;
 
 #[cfg(feature = "gpu")]
 use {
-    webgpu_fmidx::bwt::gpu::BwtPipelines,
-    webgpu_fmidx::gpu::GpuContext,
-    webgpu_fmidx::occ::gpu::OccPipelines,
-    webgpu_fmidx::suffix_array::gpu::SaPipelines,
+    webgpu_fmidx::bwt::gpu::BwtPipelines, webgpu_fmidx::gpu::GpuContext,
+    webgpu_fmidx::occ::gpu::OccPipelines, webgpu_fmidx::suffix_array::gpu::SaPipelines,
 };
 
 // ── Speedup summary ───────────────────────────────────────────────────────────
@@ -78,7 +76,11 @@ fn print_speedup_table() {
         // SA
         let cpu_sa_ms = measure_ms(|| drop(cpu_build_sa(&text)), WARMUP, ITERS);
         let gpu_sa_ms = measure_ms(
-            || drop(pollster::block_on(sa_pipelines.build_suffix_array(&ctx, &text))),
+            || {
+                drop(pollster::block_on(
+                    sa_pipelines.build_suffix_array(&ctx, &text),
+                ))
+            },
             WARMUP,
             ITERS,
         );
@@ -86,7 +88,11 @@ fn print_speedup_table() {
         // BWT (SA pre-built via CPU for both)
         let cpu_bwt_ms = measure_ms(|| drop(cpu_build_bwt(&text, &sa)), WARMUP, ITERS);
         let gpu_bwt_ms = measure_ms(
-            || drop(pollster::block_on(bwt_pipelines.build_bwt(&ctx, &text, &sa))),
+            || {
+                drop(pollster::block_on(
+                    bwt_pipelines.build_bwt(&ctx, &text, &sa),
+                ))
+            },
             WARMUP,
             ITERS,
         );
@@ -94,7 +100,11 @@ fn print_speedup_table() {
         // OCC (SA + BWT pre-built via CPU for both)
         let cpu_occ_ms = measure_ms(|| drop(cpu_build_occ(&bwt)), WARMUP, ITERS);
         let gpu_occ_ms = measure_ms(
-            || drop(pollster::block_on(occ_pipelines.build_occ_table(&ctx, &bwt))),
+            || {
+                drop(pollster::block_on(
+                    occ_pipelines.build_occ_table(&ctx, &bwt),
+                ))
+            },
             WARMUP,
             ITERS,
         );
@@ -102,7 +112,10 @@ fn print_speedup_table() {
         // Full pipeline
         let cpu_full_ms = measure_ms(
             || {
-                let cfg = FmIndexConfig { sa_sample_rate: 32, use_gpu: false };
+                let cfg = FmIndexConfig {
+                    sa_sample_rate: 32,
+                    use_gpu: false,
+                };
                 drop(FmIndex::build_cpu(&[seq.clone()], &cfg).unwrap());
             },
             WARMUP,
@@ -110,7 +123,10 @@ fn print_speedup_table() {
         );
         let gpu_full_ms = measure_ms(
             || {
-                let cfg = FmIndexConfig { sa_sample_rate: 32, use_gpu: true };
+                let cfg = FmIndexConfig {
+                    sa_sample_rate: 32,
+                    use_gpu: true,
+                };
                 drop(pollster::block_on(FmIndex::build(&[seq.clone()], &cfg)).unwrap());
             },
             WARMUP,
@@ -245,7 +261,10 @@ fn bench_full_pipeline(c: &mut Criterion) {
 
     for &size in BENCH_SIZES {
         let seq = random_dna_seq(size);
-        let cpu_cfg = FmIndexConfig { sa_sample_rate: 32, use_gpu: false };
+        let cpu_cfg = FmIndexConfig {
+            sa_sample_rate: 32,
+            use_gpu: false,
+        };
 
         group.bench_function(BenchmarkId::new("cpu", size), |b| {
             b.iter(|| FmIndex::build_cpu(&[seq.clone()], &cpu_cfg).unwrap())
@@ -253,7 +272,10 @@ fn bench_full_pipeline(c: &mut Criterion) {
 
         #[cfg(feature = "gpu")]
         if gpu_available() {
-            let gpu_cfg = FmIndexConfig { sa_sample_rate: 32, use_gpu: true };
+            let gpu_cfg = FmIndexConfig {
+                sa_sample_rate: 32,
+                use_gpu: true,
+            };
             group.bench_function(BenchmarkId::new("gpu", size), |b| {
                 b.iter(|| pollster::block_on(FmIndex::build(&[seq.clone()], &gpu_cfg)).unwrap())
             });

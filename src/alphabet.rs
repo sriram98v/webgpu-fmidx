@@ -63,7 +63,10 @@ impl DnaSequence {
                 _ => return Err(FmIndexError::InvalidCharacter(ch, i)),
             }
         }
-        Ok(Self { bases, header: String::new() })
+        Ok(Self {
+            bases,
+            header: String::new(),
+        })
     }
 
     /// Parse from a string of ACGT characters with a FASTA header.
@@ -75,7 +78,10 @@ impl DnaSequence {
 
     /// Create from pre-encoded bases (no validation).
     pub fn from_encoded(bases: Vec<u8>) -> Self {
-        Self { bases, header: String::new() }
+        Self {
+            bases,
+            header: String::new(),
+        }
     }
 
     /// Returns the FASTA header (without `>`), or empty string if not set.
