@@ -136,7 +136,7 @@ impl BidirInterval {
 fn count_smaller_than(c: u8, lo: u32, hi: u32, index: &FmIndex) -> u32 {
     let c_idx = c as usize;
     // Only iterate over alphabet characters that are actually < c.
-    // ALPHABET_SIZE is 5 ($ A C G T), so c_idx is at most 4.
+    // ALPHABET_SIZE is 6 ($ A C G T N), so c_idx is at most 5.
     (0..c_idx.min(ALPHABET_SIZE))
         .map(|b| index.occ.rank(b as u8, hi) - index.occ.rank(b as u8, lo))
         .sum()

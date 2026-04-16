@@ -1,7 +1,7 @@
 use crate::error::FmIndexError;
 
-/// Alphabet size: $, A, C, G, T
-pub const ALPHABET_SIZE: usize = 5;
+/// Alphabet size: $, A, C, G, T, N
+pub const ALPHABET_SIZE: usize = 6;
 
 /// Sentinel character (lexicographically smallest)
 pub const SENTINEL: u8 = 0;
@@ -13,6 +13,8 @@ pub const C: u8 = 2;
 pub const G: u8 = 3;
 /// Encoded value for thymine (T).
 pub const T: u8 = 4;
+/// Encoded value for any/ambiguous nucleotide (N).
+pub const N: u8 = 5;
 
 /// Encode a single ASCII DNA character to its alphabet index.
 pub fn encode_char(ch: char) -> Option<u8> {
@@ -22,6 +24,7 @@ pub fn encode_char(ch: char) -> Option<u8> {
         'C' | 'c' => Some(C),
         'G' | 'g' => Some(G),
         'T' | 't' => Some(T),
+        'N' | 'n' => Some(N),
         _ => None,
     }
 }
@@ -34,6 +37,7 @@ pub fn decode_char(code: u8) -> Option<char> {
         C => Some('C'),
         G => Some('G'),
         T => Some('T'),
+        N => Some('N'),
         _ => None,
     }
 }
@@ -60,6 +64,7 @@ impl DnaSequence {
                 'C' | 'c' => bases.push(C),
                 'G' | 'g' => bases.push(G),
                 'T' | 't' => bases.push(T),
+                'N' | 'n' => bases.push(N),
                 _ => return Err(FmIndexError::InvalidCharacter(ch, i)),
             }
         }
@@ -153,7 +158,15 @@ mod tests {
     #[test]
     fn test_invalid_char() {
         assert!(encode_char('X').is_none());
-        assert!(encode_char('N').is_none());
+        assert!(encode_char('Z').is_none());
+    }
+
+    #[test]
+    fn test_n_is_valid() {
+        assert_eq!(encode_char('N'), Some(N));
+        assert_eq!(encode_char('n'), Some(N));
+        assert_eq!(decode_char(N), Some('N'));
+        assert!(DnaSequence::from_str("ACNGT").is_ok());
     }
 
     #[test]

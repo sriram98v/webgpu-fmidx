@@ -53,7 +53,7 @@ impl BidirFmIndex {
     ///    skip it.
     /// 3. Accept seeds that are ≥ `min_len` and both left- and right-maximal.
     ///
-    /// Complexity: O(|query|² × α) where α = ALPHABET_SIZE = 5.
+    /// Complexity: O(|query|² × α) where α = ALPHABET_SIZE = 6.
     /// In practice much better: once a long SMEM is found the inner loop
     /// advances to the SMEM's right boundary.
     ///
