@@ -1,4 +1,5 @@
 use super::FmIndex;
+use crate::fm_index::seq_id::SeqId;
 
 impl FmIndex {
     /// Count occurrences of a pattern in the indexed text.
@@ -15,30 +16,12 @@ impl FmIndex {
 
     /// Locate all occurrences of a pattern in the indexed text.
     ///
-    /// Returns `(sequence_id, position)` tuples where `sequence_id` is the FASTA
-    /// header of the matching sequence and `position` is 0-based within that sequence.
+    /// Returns `(sequence_id, position)` tuples, where `position` is 0-based within the
+    /// identified sequence. Resolve a [`SeqId`] to its FASTA header with
+    /// [`seq_header`](Self::seq_header) — no string is allocated per occurrence.
     ///
     /// IUPAC ambiguity codes are resolved via base-set intersection (see `count`).
-    ///
-    /// Allocates one `String` per occurrence. When the caller only needs to identify the
-    /// sequence — not label it — use [`locate_ids`](Self::locate_ids) instead.
-    pub fn locate(&self, pattern: &[u8]) -> Vec<(String, u32)> {
-        self.locate_ids(pattern)
-            .into_iter()
-            .map(|(seq_id, pos_in_seq)| (self.seq_headers[seq_id as usize].clone(), pos_in_seq))
-            .collect()
-    }
-
-    /// Locate all occurrences of a pattern, returning `(sequence_id, position)` tuples.
-    ///
-    /// Identical to [`locate`](Self::locate) except the sequence is identified by its
-    /// integer id rather than its header string, so no `String` is allocated per
-    /// occurrence. `sequence_id` is 0-based in build order and stable across
-    /// serialization — resolve it to a header with [`seq_header`](Self::seq_header), or
-    /// build an `id -> label` table once from [`seq_headers`](Self::seq_headers).
-    ///
-    /// `position` is 0-based within the identified sequence.
-    pub fn locate_ids(&self, pattern: &[u8]) -> Vec<(u32, u32)> {
+    pub fn locate(&self, pattern: &[u8]) -> Vec<(SeqId, u32)> {
         let rows: Vec<u32> = self
             .backward_search(pattern)
             .into_iter()
@@ -355,8 +338,8 @@ impl FmIndex {
         }
     }
 
-    /// Map a text position back to (sequence_index, position_within_sequence).
-    pub fn map_position(&self, text_pos: u32) -> Option<(u32, u32)> {
+    /// Map a text position back to `(sequence_id, position_within_sequence)`.
+    pub fn map_position(&self, text_pos: u32) -> Option<(SeqId, u32)> {
         // Binary search for the sequence containing this position
         let seq_idx = self
             .seq_boundaries
@@ -370,13 +353,13 @@ impl FmIndex {
             self.seq_boundaries[seq_idx - 1]
         };
         let pos_in_seq = text_pos - seq_start;
-        Some((seq_idx as u32, pos_in_seq))
+        Some((SeqId::new(seq_idx as u32), pos_in_seq))
     }
 
     /// Locate all occurrences of multiple patterns in parallel on the GPU.
     ///
     /// Each pattern is processed by a separate GPU thread during backward search.
-    /// Returns one `Vec<(sequence_header, position)>` per query, in the same order
+    /// Returns one `Vec<(sequence_id, position)>` per query, in the same order
     /// as `queries`. Positions are 0-based within each sequence.
     ///
     /// Requires the `gpu` feature.
@@ -384,7 +367,7 @@ impl FmIndex {
     pub async fn locate_gpu(
         &self,
         queries: &[impl AsRef<[u8]>],
-    ) -> Result<Vec<Vec<(String, u32)>>, crate::error::FmIndexError> {
+    ) -> Result<Vec<Vec<(SeqId, u32)>>, crate::error::FmIndexError> {
         use crate::gpu::context_cache;
         use crate::gpu::locate::locate_batch_gpu;
         let ctx = context_cache::get_or_init()?;
@@ -394,7 +377,7 @@ impl FmIndex {
             .into_iter()
             .map(|hits| {
                 hits.into_iter()
-                    .map(|(seq_idx, pos)| (self.seq_headers[seq_idx as usize].clone(), pos))
+                    .map(|(seq_idx, pos)| (SeqId::new(seq_idx), pos))
                     .collect()
             })
             .collect())
@@ -426,6 +409,7 @@ fn merge_intervals_inplace(ivs: &mut Vec<(u32, u32)>) {
 #[cfg(test)]
 mod tests {
     use crate::alphabet::*;
+    use crate::fm_index::seq_id::SeqId;
     use crate::fm_index::{FmIndex, FmIndexConfig};
 
     fn make_index(s: &str) -> FmIndex {
@@ -565,17 +549,14 @@ mod tests {
         let idx = make_index("ACGTACGT");
         let mut positions = idx.locate(&encode_pattern("ACGT"));
         positions.sort();
-        assert_eq!(
-            positions,
-            vec![("seq_0".to_string(), 0), ("seq_0".to_string(), 4)]
-        );
+        assert_eq!(positions, vec![(SeqId::new(0), 0), (SeqId::new(0), 4)]);
     }
 
     #[test]
     fn test_locate_single_occurrence() {
         let idx = make_index("ACGTACGT");
         let positions = idx.locate(&encode_pattern("ACGTACGT"));
-        assert_eq!(positions, vec![("seq_0".to_string(), 0)]);
+        assert_eq!(positions, vec![(SeqId::new(0), 0)]);
     }
 
     #[test]
@@ -634,11 +615,7 @@ mod tests {
         positions.sort();
         assert_eq!(
             positions,
-            vec![
-                ("seq_0".to_string(), 0),
-                ("seq_0".to_string(), 4),
-                ("seq_0".to_string(), 8),
-            ]
+            vec![(SeqId::new(0), 0), (SeqId::new(0), 4), (SeqId::new(0), 8),]
         );
     }
 
@@ -656,10 +633,10 @@ mod tests {
         let idx = make_index_multi(&["ACGT", "TGCA"]);
         // First sequence: positions 0..4, separator at 4
         // Second sequence: positions 5..9, separator at 9
-        assert_eq!(idx.map_position(0), Some((0, 0)));
-        assert_eq!(idx.map_position(3), Some((0, 3)));
-        assert_eq!(idx.map_position(5), Some((1, 0)));
-        assert_eq!(idx.map_position(8), Some((1, 3)));
+        assert_eq!(idx.map_position(0), Some((SeqId::new(0), 0)));
+        assert_eq!(idx.map_position(3), Some((SeqId::new(0), 3)));
+        assert_eq!(idx.map_position(5), Some((SeqId::new(1), 0)));
+        assert_eq!(idx.map_position(8), Some((SeqId::new(1), 3)));
     }
 
     #[test]

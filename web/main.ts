@@ -22,6 +22,21 @@ function setStatus(
   el.classList.remove("hidden");
 }
 
+/// FASTA headers come from user-pasted input and are interpolated into `innerHTML`.
+function escapeHtml(s: string): string {
+  return s.replace(
+    /[&<>"']/g,
+    (c) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[c]!
+  );
+}
+
 function show(el: HTMLElement): void {
   el.classList.remove("hidden");
 }
@@ -160,11 +175,12 @@ $("search-btn").addEventListener("click", () => {
 
   const t0 = performance.now();
   let count: number;
-  let positions: Uint32Array;
+  // `locate` returns [sequenceId, offset] pairs; ids index into `seqHeaders()`.
+  let positions: Array<[number, number]>;
 
   try {
     count = currentHandle.count(pattern);
-    positions = currentHandle.locate(pattern) as unknown as Uint32Array;
+    positions = currentHandle.locate(pattern) as unknown as Array<[number, number]>;
   } catch (e) {
     setStatus($("search-status"), "error", `Query error: ${e}`);
     hide($("search-results"));
@@ -184,10 +200,17 @@ $("search-btn").addEventListener("click", () => {
     return;
   }
 
-  const sorted = Array.from(positions).sort((a, b) => a - b);
+  // Resolve ids to headers once, then index by id — not once per hit.
+  const headers = currentHandle.seq_headers() as unknown as string[];
+  const sorted = positions
+    .slice()
+    .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   const rows = sorted
     .slice(0, 200) // cap display at 200 rows
-    .map((pos) => `<tr><td>${pos}</td></tr>`)
+    .map(
+      ([seqId, pos]) =>
+        `<tr><td>${escapeHtml(headers[seqId] ?? String(seqId))}</td><td>${pos}</td></tr>`
+    )
     .join("");
 
   const truncated = sorted.length > 200
@@ -197,7 +220,7 @@ $("search-btn").addEventListener("click", () => {
   $("search-results").innerHTML = `
     ${truncated}
     <table>
-      <thead><tr><th>Position (0-based)</th></tr></thead>
+      <thead><tr><th>Sequence</th><th>Position (0-based)</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   `;

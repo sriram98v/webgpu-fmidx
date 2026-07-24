@@ -60,7 +60,8 @@ pub use alphabet::{Alphabet, AlphabetFns, DnaSequence, ExactDna, IupacDna};
 pub use error::FmIndexError;
 pub use fm_index::bidir::BidirInterval;
 pub use fm_index::bidir_index::BidirFmIndex;
-pub use fm_index::smem::{Mem, MemIds};
+pub use fm_index::seq_id::SeqId;
+pub use fm_index::smem::Mem;
 pub use fm_index::{FmIndex, FmIndexConfig};
 #[cfg(feature = "gpu")]
 pub use gpu::MemHit;

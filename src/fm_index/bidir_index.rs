@@ -1,6 +1,7 @@
 use crate::alphabet::{self, Alphabet, DnaSequence, IupacDna};
 use crate::error::FmIndexError;
 use crate::fm_index::bidir::BidirInterval;
+use crate::fm_index::seq_id::SeqId;
 use crate::fm_index::{FmIndex, FmIndexConfig};
 
 /// A bidirectional FM-index: pairs a forward FM-index (built on text T) with a
@@ -152,26 +153,10 @@ impl BidirFmIndex {
 
     /// Locate all occurrences for the pattern represented by `iv`.
     ///
-    /// Returns `(sequence_header, position_within_sequence)` tuples.
+    /// Returns `(sequence_id, position_within_sequence)` tuples; resolve a [`SeqId`] to its
+    /// FASTA header with [`seq_header`](Self::seq_header).
     /// Uses the forward SA samples; time is O(occ × sample_rate).
-    ///
-    /// Allocates one `String` per occurrence — on references with high seed multiplicity
-    /// prefer [`locate_interval_ids`](Self::locate_interval_ids).
-    pub fn locate_interval(&self, iv: &BidirInterval) -> Vec<(String, u32)> {
-        self.locate_interval_ids(iv)
-            .into_iter()
-            .map(|(seq_id, pos_in_seq)| (self.fwd.seq_headers[seq_id as usize].clone(), pos_in_seq))
-            .collect()
-    }
-
-    /// Locate all occurrences for the pattern represented by `iv`, identifying each
-    /// reference by its integer id.
-    ///
-    /// Returns `(sequence_id, position_within_sequence)` tuples. Identical to
-    /// [`locate_interval`](Self::locate_interval) but allocates no `String` per
-    /// occurrence. `sequence_id` is 0-based in build order and stable across
-    /// serialization; resolve it via [`seq_header`](Self::seq_header).
-    pub fn locate_interval_ids(&self, iv: &BidirInterval) -> Vec<(u32, u32)> {
+    pub fn locate_interval(&self, iv: &BidirInterval) -> Vec<(SeqId, u32)> {
         (iv.fwd_lo..iv.fwd_hi)
             .map(|i| {
                 let text_pos = self.fwd.resolve_sa(i);
@@ -194,26 +179,25 @@ impl BidirFmIndex {
 
     /// FASTA headers of every indexed reference, in build order.
     ///
-    /// The position of a header in this slice is its **sequence id**: the integer
-    /// returned by [`locate_interval_ids`](Self::locate_interval_ids),
-    /// [`find_smems_ids`](Self::find_smems_ids) and [`find_mems_ids`](Self::find_mems_ids).
-    /// Ids are assigned in build order and preserved across serialization, so a caller
-    /// can build an `id -> label` table once at load time and index it by `usize`
-    /// thereafter instead of hashing a header per occurrence.
+    /// A header's position in this slice is its [`SeqId`] — the id reported by
+    /// [`locate_interval`](Self::locate_interval), [`find_smems`](Self::find_smems) and
+    /// [`find_mems`](Self::find_mems). Ids are preserved across serialization, so a caller
+    /// can build an `id -> label` table from this slice once at load time and index it by
+    /// [`SeqId::index`] thereafter instead of hashing a header per occurrence.
     pub fn seq_headers(&self) -> &[String] {
         self.fwd.seq_headers()
     }
 
-    /// Header for a 0-based sequence id, or `None` when `id` is out of range.
-    pub fn seq_header(&self, id: usize) -> Option<&str> {
+    /// Header for a sequence id, or `None` when the id is out of range. O(1).
+    pub fn seq_header(&self, id: SeqId) -> Option<&str> {
         self.fwd.seq_header(id)
     }
 
-    /// Id for a header, or `None` when no reference carries it.
+    /// Id for a header, or `None` when no reference carries it. O(1).
     ///
-    /// O(n) linear scan, intended for one-off lookups. To map many headers, build a
-    /// map from [`seq_headers`](Self::seq_headers) instead of calling this per header.
-    pub fn seq_id(&self, header: &str) -> Option<usize> {
+    /// Headers are unique — [`FmIndexError::DuplicateHeader`] is raised at build time
+    /// otherwise — so this is an exact inverse of [`seq_header`](Self::seq_header).
+    pub fn seq_id(&self, header: &str) -> Option<SeqId> {
         self.fwd.seq_id(header)
     }
 
@@ -516,7 +500,7 @@ async fn resolve_mem_hits_gpu(
         let (q, m) = index_map[k];
         let raw = iv.fwd_hi.saturating_sub(iv.fwd_lo);
         let effective = raw.min(max_hits_per_mem) as usize;
-        output[q][m].positions = vec![(0u32, 0u32); effective];
+        output[q][m].positions = vec![(SeqId::new(0), 0u32); effective];
     }
 
     // ── Resolve phase (batched) ───────────────────────────────────────────────
@@ -545,7 +529,7 @@ async fn resolve_mem_hits_gpu(
             let hits = end - start;
             let dst = &mut output[q][m].positions[dest_start..dest_start + hits];
             for (j, slot) in dst.iter_mut().enumerate() {
-                *slot = (ref_ids[start + j], ref_offs[start + j]);
+                *slot = (SeqId::new(ref_ids[start + j]), ref_offs[start + j]);
             }
         }
     }
@@ -670,10 +654,7 @@ mod tests {
         }
         let mut positions = idx.locate_interval(&iv);
         positions.sort();
-        assert_eq!(
-            positions,
-            vec![("seq_0".to_string(), 0), ("seq_0".to_string(), 4)]
-        );
+        assert_eq!(positions, vec![(SeqId::new(0), 0), (SeqId::new(0), 4)]);
     }
 
     #[test]

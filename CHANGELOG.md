@@ -19,17 +19,24 @@ name, and its earlier history is not carried over here.
   (`IupacDna` default, `ExactDna` for exact ACGT matching).
 - WASM bindings for in-browser WebGPU use; index serialization (`to_bytes` / `from_bytes`).
 - Community health files, CI (fmt / clippy / build / test on `--all-features`), and Dependabot.
-- Sequence-id accessors on `FmIndex` and `BidirFmIndex` — `seq_headers()`, `seq_header(id)`,
-  `seq_id(header)`. Ids are 0-based in build order and stable across serialization, so callers
-  can build an `id -> label` table once at load time.
-- Integer-id locate variants that allocate no header `String` per occurrence:
-  `FmIndex::locate_ids`, `BidirFmIndex::locate_interval_ids`, and `find_smems_ids` /
-  `find_mems_ids` returning the new `MemIds` type. `MemIds::positions` has the same
-  `(seq_id, offset)` shape as `MemHit::positions` on the GPU path. The existing
-  `String`-returning `locate` / `locate_interval` / `find_smems` / `find_mems` are unchanged.
-- WASM bindings for the above: `locateIds`, `seqHeader`, `seqId`.
+- `SeqId`, a stable 0-based identifier for an indexed reference. Assigned in build order and
+  preserved across `to_bytes` / `from_bytes`.
+- Sequence-id accessors on `FmIndex` and `BidirFmIndex` — `seq_headers()`, `seq_header(id)`
+  and `seq_id(header)`. Both directions are O(1), backed by a header map built at
+  construction and rebuilt on deserialization (it is derived, so it is not serialized).
+- `FmIndexError::DuplicateHeader`, raised at build time when two sequences share a header.
+  Uniqueness is what makes `seq_id` an exact inverse of `seq_header`. Sequences supplied
+  without a header are still auto-named `seq_{i}`, so this only fires on genuinely repeated
+  names.
+- WASM bindings for the accessors: `seq_header`, `seq_id`, `seq_headers`.
 
 ### Changed
+- Queries report match locations as `(SeqId, offset)` rather than `(String, offset)`, so no
+  header string is allocated per occurrence — the cost was per occurrence rather than per
+  seed, and scaled with seed multiplicity. Affects `FmIndex::locate`, `FmIndex::locate_gpu`,
+  `FmIndex::map_position`, `BidirFmIndex::locate_interval`, `Mem::positions` and
+  `MemHit::positions`, and the WASM `locate`. Callers that need labels resolve ids through
+  `seq_header()`, or build an `id -> label` table once from `seq_headers()`.
 - Licensed under Apache-2.0.
 
 [Unreleased]: https://github.com/sriram98v/haystackfm/commits/main
