@@ -56,6 +56,7 @@ pub mod gpu;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
+pub use alphabet::{decode_char, encode_byte, encode_char};
 pub use alphabet::{Alphabet, AlphabetFns, DnaSequence, ExactDna, IupacDna};
 pub use error::FmIndexError;
 pub use fm_index::bidir::BidirInterval;

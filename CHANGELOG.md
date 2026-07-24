@@ -8,6 +8,33 @@ Before 1.0, a breaking change bumps the **minor** version.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-24
+
+Breaking release: the index now retains the indexed text and can serve the bases of any
+sequence, so callers no longer need to keep their own copy of every reference.
+
+### Added
+- `FmIndex::sequence(SeqId)` / `BidirFmIndex::sequence(SeqId)` — the bases of one indexed
+  sequence as a borrowed slice, in O(1), with the trailing sentinel excluded. Returns
+  alphabet codes (`A = 1`, `C = 2`, …), not ASCII; use `decode_char` to render them.
+- `FmIndex::sequence_by_header(&str)` / `BidirFmIndex::sequence_by_header(&str)` — the same
+  by header, equivalent to `seq_id(h).and_then(|id| self.sequence(id))`.
+- `encode_byte`, `encode_char` and `decode_char` re-exported at the crate root, so callers
+  can move queries into (and results out of) the alphabet's code space without reaching
+  into the `alphabet` module.
+
+### Changed
+- **Breaking.** The serialized layout gains a `text` field, so indexes written by 0.2.0 and
+  earlier are rejected by `from_bytes` and must be rebuilt.
+- The concatenated text is no longer dropped after BWT construction. This costs ~n bytes of
+  resident and serialized size and forgoes a build-time peak-memory reduction, in exchange
+  for random-access substrings. An FM-index can otherwise only recover text by LF-walking
+  backwards one symbol at a time — far too slow for a caller rescoring a read against a
+  candidate diagonal, which is the case this exists to serve.
+- Only the forward half of a `BidirFmIndex` retains text. The reverse half's copy is a
+  redundant reversal that is never served, so it is released at build time, keeping the
+  overhead at ~n rather than ~2n.
+
 ## [0.2.0] - 2026-07-24
 
 Breaking release: match locations are now reported by integer sequence id instead of by

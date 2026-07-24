@@ -61,9 +61,19 @@ pub struct FmIndex {
     pub(crate) c_array: CArray,
     pub(crate) occ: OccTable,
     pub(crate) sa_samples: SampledSuffixArray,
+    /// The concatenated, sentinel-separated text in alphabet codes.
+    ///
+    /// Retained so [`sequence`](Self::sequence) can hand out a borrowed slice in O(1).
+    /// An FM-index can otherwise only recover text by LF-walking backwards one symbol at a
+    /// time, which is far too slow for callers that need random-access substrings (e.g. an
+    /// aligner rescoring a read against a candidate diagonal). Stored unpacked: the alphabet
+    /// fits in a nibble, but a packed representation could not be borrowed without unpacking
+    /// into a fresh allocation on every call, which is the cost this field exists to avoid.
+    pub(crate) text: Vec<u8>,
     pub(crate) text_len: u32,
     pub(crate) num_sequences: u32,
     /// Cumulative sequence lengths for mapping positions back to sequences.
+    /// `seq_boundaries[k]` is the end of sequence `k` *including* its trailing sentinel.
     pub(crate) seq_boundaries: Vec<u32>,
     /// FASTA headers for each sequence (index-parallel with seq_boundaries).
     /// A sequence's position here is its [`SeqId`].
@@ -151,9 +161,8 @@ impl FmIndex {
         // Build suffix array (single-threaded; psacak has no parallel API)
         let sa = build_suffix_array(&text);
 
-        // Build BWT from SA, then free text (~n bytes peak reduction)
+        // Build BWT from SA. The text is retained (not dropped) to back `sequence()`.
         let bwt = build_bwt(&text, &sa);
-        drop(text);
 
         // Sample SA then free it before building Occ (saves ~4n bytes of peak memory)
         // Every sequence start must be sampled so `resolve_sa`'s LF-walk never crosses a
@@ -193,6 +202,7 @@ impl FmIndex {
             c_array,
             occ,
             sa_samples,
+            text,
             text_len,
             num_sequences,
             seq_boundaries,
@@ -234,6 +244,47 @@ impl FmIndex {
     /// otherwise — so this is an exact inverse of [`seq_header`](Self::seq_header).
     pub fn seq_id(&self, header: &str) -> Option<SeqId> {
         self.header_index.get(header)
+    }
+
+    /// Bases of one indexed sequence, or `None` when the id is out of range.
+    ///
+    /// O(1) — a borrowed slice of the retained text, with the trailing sentinel excluded.
+    ///
+    /// The bases are **alphabet codes**, not ASCII: `A = 1`, `C = 2`, `G = 3`, `T = 4`,
+    /// `N = 5`, and so on (see [`crate::alphabet`]). Use [`crate::alphabet::decode_char`]
+    /// to render them, or [`crate::alphabet::encode_byte`] to bring a query into the same
+    /// space before comparing.
+    pub fn sequence(&self, id: SeqId) -> Option<&[u8]> {
+        // Empty text means it was released by `forget_text` (the reverse half of a
+        // `BidirFmIndex`); a built index always has a non-empty text otherwise.
+        if self.text.is_empty() {
+            return None;
+        }
+        // `seq_boundaries[k]` is the end of sequence k *including* its sentinel, so the
+        // bases run from the previous boundary up to (but not including) that sentinel.
+        let end = *self.seq_boundaries.get(id.index())? as usize - 1;
+        let start = match id.index() {
+            0 => 0,
+            k => self.seq_boundaries[k - 1] as usize,
+        };
+        Some(&self.text[start..end])
+    }
+
+    /// Bases of the sequence carrying `header`, or `None` when no reference carries it.
+    ///
+    /// Equivalent to `seq_id(header).and_then(|id| self.sequence(id))`; see
+    /// [`sequence`](Self::sequence) for the encoding of the returned bases.
+    pub fn sequence_by_header(&self, header: &str) -> Option<&[u8]> {
+        self.seq_id(header).and_then(|id| self.sequence(id))
+    }
+
+    /// Release the retained text, giving up [`sequence`](Self::sequence) (which then
+    /// returns `None`) in exchange for ~n bytes of resident and serialized size.
+    ///
+    /// Used for the reverse half of a [`BidirFmIndex`], whose text is a redundant
+    /// reversal of the forward half's and is never served to callers.
+    pub(crate) fn forget_text(&mut self) {
+        self.text = Vec::new();
     }
 
     /// Build an FM-index from a set of DNA sequences using GPU acceleration.
@@ -308,6 +359,7 @@ impl FmIndex {
             c_array,
             occ,
             sa_samples,
+            text,
             text_len,
             num_sequences,
             seq_boundaries,
