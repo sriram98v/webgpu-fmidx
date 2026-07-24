@@ -36,9 +36,15 @@ pub struct Mem {
     pub query_start: usize,              // 0-based inclusive
     pub query_end:   usize,              // 0-based exclusive
     pub match_count: u32,                // number of occurrences
-    pub positions:   Vec<(String, u32)>, // (seq name, offset) — empty when locate=false
+    pub positions:   Vec<(SeqId, u32)>,  // (seq id, offset) — empty when locate=false
 }
 ```
+
+`positions` identifies each reference by [`SeqId`](./concepts.md#sequence-ids-vs-headers) —
+its 0-based build order, not its FASTA name. Resolve one with `bidir.seq_header(id)`, or
+build a label table once from `bidir.seq_headers()` and index it by `id.index()`. This is the
+hot path the id representation exists for: a conserved seed can occur in hundreds of
+references, and positions are resolved per occurrence.
 
 ## GPU MEM / SMEM
 
@@ -61,14 +67,17 @@ let mem_hits  = bidir.find_mems_gpu(&queries,  18, boundaries, 1024).await?;
 ### `MemHit`
 
 ```rust
-pub struct MemHit {                   // GPU result type
+pub struct MemHit {                     // GPU result type
     pub query_start: u32,
     pub query_end:   u32,
     pub match_count: u32,
-    pub positions:   Vec<(u32, u32)>, // (ref_id, offset_within_ref)
-    pub truncated:   bool,            // true if positions capped at max_hits_per_mem
+    pub positions:   Vec<(SeqId, u32)>, // same shape as Mem::positions
+    pub truncated:   bool,              // true if positions capped at max_hits_per_mem
 }
 ```
+
+`positions` has the same `(SeqId, offset)` shape as the CPU `Mem::positions`, so the same
+label-resolution code works against either path.
 
 `max_hits_per_mem` caps how many positions each MEM resolves; when a MEM has more occurrences
 than the cap, `truncated` is set. GPU results are parity-tested against the CPU

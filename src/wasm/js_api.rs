@@ -174,7 +174,7 @@ impl FmIndexHandle {
     /// Returns a JS `Array` of `[sequenceId, position]` pairs, where `sequenceId` is the
     /// 0-based index of the sequence in build order and `position` is 0-based within that
     /// sequence. No header string is allocated per hit — resolve ids to headers with
-    /// `seqHeader`, or read them all once from `seqHeaders`.
+    /// `seq_header`, or read them all once from `seq_headers`.
     pub fn locate(&self, pattern: &str) -> Result<js_sys::Array, JsValue> {
         let encoded = encode_pattern(pattern)?;
         let hits = self.index.locate(&encoded);

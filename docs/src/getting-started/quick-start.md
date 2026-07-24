@@ -15,11 +15,14 @@ let index = FmIndex::build_cpu(&[seq], &config)?;
 let query = DnaSequence::from_str("ACGT")?;
 
 assert_eq!(index.count(query.as_slice()), 2);
-let positions = index.locate(query.as_slice()); // Vec<(String, u32)> — (seq name, offset)
+let positions = index.locate(query.as_slice()); // Vec<(SeqId, u32)> — (seq id, offset)
 ```
 
-`count` returns how many times the pattern occurs; `locate` returns the `(seq_id, offset)`
-of each occurrence. See [Count & Locate](../guide/count-locate.md) for the full surface.
+`count` returns how many times the pattern occurs; `locate` returns the `(SeqId, offset)` of
+each occurrence. A `SeqId` is the reference's 0-based position in build order, not its FASTA
+name — resolve one with `index.seq_header(id)`, and go the other way with
+`index.seq_id("chr1")`. See [Sequence ids vs. headers](../guide/concepts.md#sequence-ids-vs-headers)
+for why, and [Count & Locate](../guide/count-locate.md) for the full surface.
 
 ## Build on the GPU
 

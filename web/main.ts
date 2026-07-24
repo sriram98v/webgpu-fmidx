@@ -175,7 +175,7 @@ $("search-btn").addEventListener("click", () => {
 
   const t0 = performance.now();
   let count: number;
-  // `locate` returns [sequenceId, offset] pairs; ids index into `seqHeaders()`.
+  // `locate` returns [sequenceId, offset] pairs; ids index into `seq_headers()`.
   let positions: Array<[number, number]>;
 
   try {

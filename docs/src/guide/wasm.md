@@ -27,6 +27,12 @@ const handle = await builder.build_gpu();    // or builder.build_cpu()
 
 console.log(handle.count("ACGT"));           // number of occurrences
 console.log(handle.locate("ACGT"));          // Array of [seqId, offset] pairs
+
+// seqId is the sequence's 0-based build order, not its FASTA header.
+console.log(handle.seq_header(0));           // "seq1"  — id -> header, O(1)
+console.log(handle.seq_id("seq1"));          // 0       — header -> id, O(1)
+console.log(handle.seq_headers());           // ["seq1", "seq2"] — indexed by seqId
+
 console.log(handle.text_len());              // total text length
 console.log(handle.num_sequences());         // number of indexed sequences
 
