@@ -152,17 +152,32 @@ impl BidirFmIndex {
 
     /// Locate all occurrences for the pattern represented by `iv`.
     ///
-    /// Returns `(sequence_id, position_within_sequence)` tuples.
+    /// Returns `(sequence_header, position_within_sequence)` tuples.
     /// Uses the forward SA samples; time is O(occ × sample_rate).
+    ///
+    /// Allocates one `String` per occurrence — on references with high seed multiplicity
+    /// prefer [`locate_interval_ids`](Self::locate_interval_ids).
     pub fn locate_interval(&self, iv: &BidirInterval) -> Vec<(String, u32)> {
+        self.locate_interval_ids(iv)
+            .into_iter()
+            .map(|(seq_id, pos_in_seq)| (self.fwd.seq_headers[seq_id as usize].clone(), pos_in_seq))
+            .collect()
+    }
+
+    /// Locate all occurrences for the pattern represented by `iv`, identifying each
+    /// reference by its integer id.
+    ///
+    /// Returns `(sequence_id, position_within_sequence)` tuples. Identical to
+    /// [`locate_interval`](Self::locate_interval) but allocates no `String` per
+    /// occurrence. `sequence_id` is 0-based in build order and stable across
+    /// serialization; resolve it via [`seq_header`](Self::seq_header).
+    pub fn locate_interval_ids(&self, iv: &BidirInterval) -> Vec<(u32, u32)> {
         (iv.fwd_lo..iv.fwd_hi)
             .map(|i| {
                 let text_pos = self.fwd.resolve_sa(i);
-                let (seq_idx, pos_in_seq) = self
-                    .fwd
+                self.fwd
                     .map_position(text_pos)
-                    .expect("resolved SA position must be within text bounds");
-                (self.fwd.seq_headers[seq_idx as usize].clone(), pos_in_seq)
+                    .expect("resolved SA position must be within text bounds")
             })
             .collect()
     }
@@ -175,6 +190,31 @@ impl BidirFmIndex {
     /// Number of sequences indexed.
     pub fn num_sequences(&self) -> u32 {
         self.fwd.num_sequences
+    }
+
+    /// FASTA headers of every indexed reference, in build order.
+    ///
+    /// The position of a header in this slice is its **sequence id**: the integer
+    /// returned by [`locate_interval_ids`](Self::locate_interval_ids),
+    /// [`find_smems_ids`](Self::find_smems_ids) and [`find_mems_ids`](Self::find_mems_ids).
+    /// Ids are assigned in build order and preserved across serialization, so a caller
+    /// can build an `id -> label` table once at load time and index it by `usize`
+    /// thereafter instead of hashing a header per occurrence.
+    pub fn seq_headers(&self) -> &[String] {
+        self.fwd.seq_headers()
+    }
+
+    /// Header for a 0-based sequence id, or `None` when `id` is out of range.
+    pub fn seq_header(&self, id: usize) -> Option<&str> {
+        self.fwd.seq_header(id)
+    }
+
+    /// Id for a header, or `None` when no reference carries it.
+    ///
+    /// O(n) linear scan, intended for one-off lookups. To map many headers, build a
+    /// map from [`seq_headers`](Self::seq_headers) instead of calling this per header.
+    pub fn seq_id(&self, header: &str) -> Option<usize> {
+        self.fwd.seq_id(header)
     }
 
     // ── Serialization ─────────────────────────────────────────────────────────

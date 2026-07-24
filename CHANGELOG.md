@@ -19,6 +19,15 @@ name, and its earlier history is not carried over here.
   (`IupacDna` default, `ExactDna` for exact ACGT matching).
 - WASM bindings for in-browser WebGPU use; index serialization (`to_bytes` / `from_bytes`).
 - Community health files, CI (fmt / clippy / build / test on `--all-features`), and Dependabot.
+- Sequence-id accessors on `FmIndex` and `BidirFmIndex` — `seq_headers()`, `seq_header(id)`,
+  `seq_id(header)`. Ids are 0-based in build order and stable across serialization, so callers
+  can build an `id -> label` table once at load time.
+- Integer-id locate variants that allocate no header `String` per occurrence:
+  `FmIndex::locate_ids`, `BidirFmIndex::locate_interval_ids`, and `find_smems_ids` /
+  `find_mems_ids` returning the new `MemIds` type. `MemIds::positions` has the same
+  `(seq_id, offset)` shape as `MemHit::positions` on the GPU path. The existing
+  `String`-returning `locate` / `locate_interval` / `find_smems` / `find_mems` are unchanged.
+- WASM bindings for the above: `locateIds`, `seqHeader`, `seqId`.
 
 ### Changed
 - Licensed under Apache-2.0.

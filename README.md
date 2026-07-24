@@ -121,7 +121,9 @@ builder.add_fasta(`>seq1\nACGTACGT\n>seq2\nTGCATGCA`);
 const handle = await builder.build_gpu();    // or builder.build_cpu()
 
 console.log(handle.count("ACGT"));           // number of occurrences
-console.log(handle.locate("ACGT"));          // Array of [seqId, offset] pairs
+console.log(handle.locate("ACGT"));          // Array of [seqName, offset] pairs
+console.log(handle.locateIds("ACGT"));       // Array of [seqId, offset] pairs — no strings
+console.log(handle.seqHeader(0));            // header for a sequence id
 console.log(handle.text_len());              // total text length
 console.log(handle.num_sequences());         // number of indexed sequences
 
@@ -144,8 +146,14 @@ FmIndex::build(sequences, config).await?        // async, GPU (feature = "gpu")
 // Query
 index.count(pattern)                            // u32 — number of occurrences
 index.locate(pattern)                           // Vec<(String, u32)> — (seq name, offset)
+index.locate_ids(pattern)                       // Vec<(u32, u32)> — (seq id, offset), no String per hit
 index.text_len()                                // u32
 index.num_sequences()                           // u32
+
+// Sequence ids — 0-based, in build order, stable across to_bytes/from_bytes
+index.seq_headers()                             // &[String] — index = seq id
+index.seq_header(id)                            // Option<&str>
+index.seq_id(header)                            // Option<usize> — O(n) scan
 
 // Persistence
 index.to_bytes()?                               // Vec<u8>
@@ -162,13 +170,18 @@ BidirFmIndex::build_cpu_with::<ExactDna>(sequences, config)?  // custom alphabet
 bidir.find_smems(query, min_len, locate)        // Vec<Mem>
 bidir.find_mems(query, min_len, locate)         // Vec<Mem>
 
+// Same matches, integer reference ids instead of header strings — no String per occurrence
+bidir.find_smems_ids(query, min_len, locate)    // Vec<MemIds>
+bidir.find_mems_ids(query, min_len, locate)     // Vec<MemIds>
+bidir.seq_headers() / seq_header(id) / seq_id(header)   // resolve ids to headers
+
 // GPU MEM finding (feature = "gpu"); `queries: &[DnaSequence]`,
 // `ref_boundaries` from `bidir.seq_boundaries()`, GPU context from the cache
 bidir.find_smems_gpu(queries, min_len, ref_boundaries, max_hits_per_mem).await?  // Vec<Vec<MemHit>>
 bidir.find_mems_gpu(queries,  min_len, ref_boundaries, max_hits_per_mem).await?  // Vec<Vec<MemHit>>
 ```
 
-### `Mem` / `MemHit`
+### `Mem` / `MemIds` / `MemHit`
 
 ```rust
 pub struct Mem {
@@ -176,6 +189,13 @@ pub struct Mem {
     pub query_end:   usize,       // 0-based exclusive
     pub match_count: u32,         // SA interval size
     pub positions:   Vec<(String, u32)>, // (seq name, offset) — empty when locate=false
+}
+
+pub struct MemIds {               // same matches as Mem, ids instead of headers
+    pub query_start: usize,
+    pub query_end:   usize,
+    pub match_count: u32,
+    pub positions:   Vec<(u32, u32)>, // (seq id, offset) — same shape as MemHit
 }
 
 pub struct MemHit {               // GPU result type
@@ -186,6 +206,10 @@ pub struct MemHit {               // GPU result type
     pub truncated:   bool,        // true if positions capped at max_hits_per_mem
 }
 ```
+
+`Mem` allocates one `String` per located occurrence. On references with high seed
+multiplicity — a conserved seed hitting hundreds of sequences — prefer `MemIds` and resolve
+ids to labels once via `seq_headers()`.
 
 ---
 

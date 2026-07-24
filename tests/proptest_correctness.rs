@@ -139,6 +139,34 @@ proptest! {
         );
     }
 
+    /// `locate_ids` must report the same occurrences as `locate`, with each id
+    /// resolving to the header the `String` path returned — at any sampling rate.
+    #[test]
+    fn locate_ids_matches_locate_multi_sequence(
+        texts in prop::collection::vec(dna_string(200), 1..=5),
+        pattern in dna_string(10),
+        sa_sample_rate in 1usize..=32,
+    ) {
+        let idx = build_index(&texts, sa_sample_rate);
+        let pat = encode_pat(&pattern);
+
+        let by_header = idx.locate(&pat);
+        let by_id = idx.locate_ids(&pat);
+        prop_assert_eq!(
+            by_header.len(), by_id.len(),
+            "hit count mismatch | pattern='{}' rate={}", pattern, sa_sample_rate
+        );
+
+        let relabeled: Vec<(String, u32)> = by_id
+            .into_iter()
+            .map(|(id, pos)| (idx.seq_header(id as usize).unwrap().to_string(), pos))
+            .collect();
+        prop_assert_eq!(
+            relabeled, by_header,
+            "locate_ids disagrees with locate | pattern='{}' rate={}", pattern, sa_sample_rate
+        );
+    }
+
     /// `locate` must return exact positions regardless of SA sampling rate.
     #[test]
     fn locate_correct_with_various_sampling_rates(
@@ -246,6 +274,24 @@ fn multi_seq_headers_correct() {
         assert!(t_hits.contains(&("seq_1".to_string(), p)));
     }
     assert!(!t_hits.iter().any(|(h, _)| h == "seq_2"));
+}
+
+#[test]
+fn multi_seq_ids_resolve_to_headers() {
+    let texts = vec!["ACGT".to_string(), "TTTT".to_string(), "GGGG".to_string()];
+    let idx = build_index(&texts, 1);
+
+    for (i, expected) in ["seq_0", "seq_1", "seq_2"].iter().enumerate() {
+        assert_eq!(idx.seq_header(i), Some(*expected));
+        assert_eq!(idx.seq_id(expected), Some(i));
+    }
+
+    let t_hits: HashSet<(u32, u32)> = idx.locate_ids(&encode_pat("T")).into_iter().collect();
+    assert!(t_hits.contains(&(0, 3)));
+    for p in 0..4u32 {
+        assert!(t_hits.contains(&(1, p)));
+    }
+    assert!(!t_hits.iter().any(|&(id, _)| id == 2));
 }
 
 #[test]

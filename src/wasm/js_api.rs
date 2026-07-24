@@ -185,6 +185,37 @@ impl FmIndexHandle {
         Ok(result)
     }
 
+    /// Locate all occurrences of `pattern`, identifying sequences by integer id.
+    ///
+    /// Returns a JS `Array` of `[sequenceId, position]` pairs, where `sequenceId` is the
+    /// 0-based index of the sequence in build order and `position` is 0-based within that
+    /// sequence. Unlike `locate`, this allocates no header string per hit — resolve ids to
+    /// headers once with `seqHeader`.
+    pub fn locate_ids(&self, pattern: &str) -> Result<js_sys::Array, JsValue> {
+        let encoded = encode_pattern(pattern)?;
+        let hits = self.index.locate_ids(&encoded);
+        let result = js_sys::Array::new_with_length(hits.len() as u32);
+        for (i, (seq_id, pos)) in hits.into_iter().enumerate() {
+            let pair = js_sys::Array::new_with_length(2);
+            pair.set(0, wasm_bindgen::JsValue::from_f64(seq_id as f64));
+            pair.set(1, wasm_bindgen::JsValue::from_f64(pos as f64));
+            result.set(i as u32, pair.into());
+        }
+        Ok(result)
+    }
+
+    /// FASTA header for a 0-based sequence id, or `undefined` if out of range.
+    pub fn seq_header(&self, id: usize) -> Option<String> {
+        self.index.seq_header(id).map(str::to_owned)
+    }
+
+    /// Id for a FASTA header, or `undefined` if no sequence carries it.
+    ///
+    /// O(n) linear scan — intended for one-off lookups.
+    pub fn seq_id(&self, header: &str) -> Option<usize> {
+        self.index.seq_id(header)
+    }
+
     /// Total length of the indexed text (including per-sequence sentinel characters).
     pub fn text_len(&self) -> u32 {
         self.index.text_len()

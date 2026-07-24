@@ -23,11 +23,46 @@ pub struct Mem {
     /// Number of occurrences in the reference text.
     pub match_count: u32,
     /// Reference positions (populated only when `locate = true`).
-    /// Each entry is `(sequence_id, position_within_sequence)`.
+    /// Each entry is `(sequence_header, position_within_sequence)`.
+    ///
+    /// Each entry allocates a `String`. For high-multiplicity seeds prefer [`MemIds`],
+    /// returned by [`find_smems_ids`](BidirFmIndex::find_smems_ids) and
+    /// [`find_mems_ids`](BidirFmIndex::find_mems_ids).
     pub positions: Vec<(String, u32)>,
 }
 
 impl Mem {
+    /// Length of the matched pattern in the query.
+    pub fn len(&self) -> usize {
+        self.query_end - self.query_start
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.query_start >= self.query_end
+    }
+}
+
+/// A MEM/SMEM whose reference positions carry integer sequence ids instead of header
+/// strings.
+///
+/// Same matches as [`Mem`] — only the position representation differs. `positions` has the
+/// same `(sequence_id, offset)` shape as `MemHit::positions` on the GPU path (feature
+/// `gpu`), so CPU and GPU results can be consumed by the same code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemIds {
+    /// Start position in the query (0-based, inclusive).
+    pub query_start: usize,
+    /// End position in the query (0-based, exclusive).
+    pub query_end: usize,
+    /// Number of occurrences in the reference text.
+    pub match_count: u32,
+    /// Reference positions (populated only when `locate = true`).
+    /// Each entry is `(sequence_id, position_within_sequence)`, where `sequence_id` is
+    /// 0-based in build order and stable across serialization.
+    pub positions: Vec<(u32, u32)>,
+}
+
+impl MemIds {
     /// Length of the matched pattern in the query.
     pub fn len(&self) -> usize {
         self.query_end - self.query_start
@@ -69,6 +104,27 @@ impl BidirFmIndex {
     /// SMEMs in order of increasing `query_start`.  Duplicate `(start, end)` pairs
     /// are deduplicated.
     pub fn find_smems(&self, query: &[u8], min_len: usize, locate: bool) -> Vec<Mem> {
+        self.smem_raws(query, min_len)
+            .into_iter()
+            .map(|raw| self.locate_raw(raw, locate))
+            .collect()
+    }
+
+    /// [`find_smems`](Self::find_smems) with integer reference ids.
+    ///
+    /// Finds exactly the same SMEMs; only the position representation differs. Avoids one
+    /// heap-allocated `String` per located occurrence, which dominates when a seed occurs
+    /// in many references. See [`MemIds`].
+    pub fn find_smems_ids(&self, query: &[u8], min_len: usize, locate: bool) -> Vec<MemIds> {
+        self.smem_raws(query, min_len)
+            .into_iter()
+            .map(|raw| self.locate_raw_ids(raw, locate))
+            .collect()
+    }
+
+    /// The SMEMs of `query` as unresolved [`RawMem`]s, shared by
+    /// [`find_smems`](Self::find_smems) and [`find_smems_ids`](Self::find_smems_ids).
+    fn smem_raws(&self, query: &[u8], min_len: usize) -> Vec<RawMem> {
         if query.is_empty() || min_len == 0 {
             return vec![];
         }
@@ -97,7 +153,7 @@ impl BidirFmIndex {
                 .enumerate()
                 .any(|(j, &(s2, e2))| j != idx && s2 <= s && e <= e2 && (s2, e2) != (s, e));
             if !contained {
-                smems.push(self.locate_raw(raw, locate));
+                smems.push(raw);
             }
         }
         smems
@@ -111,6 +167,26 @@ impl BidirFmIndex {
     ///
     /// Complexity: O(|query|² × α).
     pub fn find_mems(&self, query: &[u8], min_len: usize, locate: bool) -> Vec<Mem> {
+        self.mem_raws(query, min_len)
+            .into_iter()
+            .map(|raw| self.locate_raw(raw, locate))
+            .collect()
+    }
+
+    /// [`find_mems`](Self::find_mems) with integer reference ids.
+    ///
+    /// Finds exactly the same MEMs; only the position representation differs. Avoids one
+    /// heap-allocated `String` per located occurrence. See [`MemIds`].
+    pub fn find_mems_ids(&self, query: &[u8], min_len: usize, locate: bool) -> Vec<MemIds> {
+        self.mem_raws(query, min_len)
+            .into_iter()
+            .map(|raw| self.locate_raw_ids(raw, locate))
+            .collect()
+    }
+
+    /// The MEMs of `query` as unresolved [`RawMem`]s, shared by
+    /// [`find_mems`](Self::find_mems) and [`find_mems_ids`](Self::find_mems_ids).
+    fn mem_raws(&self, query: &[u8], min_len: usize) -> Vec<RawMem> {
         if query.is_empty() || min_len == 0 {
             return vec![];
         }
@@ -118,9 +194,7 @@ impl BidirFmIndex {
         let mut raws = self.collect_raw_mems(query, min_len);
         raws.sort_by_key(|m| (m.query_start, m.query_end));
         raws.dedup_by_key(|m| (m.query_start, m.query_end));
-        raws.into_iter()
-            .map(|raw| self.locate_raw(raw, locate))
-            .collect()
+        raws
     }
 
     /// Find the right-maximal, left-maximal seed starting at query position `i`.
@@ -306,6 +380,25 @@ impl BidirFmIndex {
             Vec::new()
         };
         Mem {
+            query_start: raw.query_start,
+            query_end: raw.query_end,
+            match_count: raw.match_count,
+            positions,
+        }
+    }
+
+    /// Resolve a [`RawMem`] into a public [`MemIds`], locating reference positions only when
+    /// `locate` is set. Id-returning counterpart of [`locate_raw`](Self::locate_raw).
+    fn locate_raw_ids(&self, raw: RawMem, locate: bool) -> MemIds {
+        let positions = if locate {
+            raw.ivs
+                .iter()
+                .flat_map(|iv| self.locate_interval_ids(iv))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        MemIds {
             query_start: raw.query_start,
             query_end: raw.query_end,
             match_count: raw.match_count,

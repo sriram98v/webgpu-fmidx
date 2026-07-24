@@ -19,7 +19,26 @@ impl FmIndex {
     /// header of the matching sequence and `position` is 0-based within that sequence.
     ///
     /// IUPAC ambiguity codes are resolved via base-set intersection (see `count`).
+    ///
+    /// Allocates one `String` per occurrence. When the caller only needs to identify the
+    /// sequence — not label it — use [`locate_ids`](Self::locate_ids) instead.
     pub fn locate(&self, pattern: &[u8]) -> Vec<(String, u32)> {
+        self.locate_ids(pattern)
+            .into_iter()
+            .map(|(seq_id, pos_in_seq)| (self.seq_headers[seq_id as usize].clone(), pos_in_seq))
+            .collect()
+    }
+
+    /// Locate all occurrences of a pattern, returning `(sequence_id, position)` tuples.
+    ///
+    /// Identical to [`locate`](Self::locate) except the sequence is identified by its
+    /// integer id rather than its header string, so no `String` is allocated per
+    /// occurrence. `sequence_id` is 0-based in build order and stable across
+    /// serialization — resolve it to a header with [`seq_header`](Self::seq_header), or
+    /// build an `id -> label` table once from [`seq_headers`](Self::seq_headers).
+    ///
+    /// `position` is 0-based within the identified sequence.
+    pub fn locate_ids(&self, pattern: &[u8]) -> Vec<(u32, u32)> {
         let rows: Vec<u32> = self
             .backward_search(pattern)
             .into_iter()
@@ -30,10 +49,8 @@ impl FmIndex {
         text_positions
             .into_iter()
             .map(|text_pos| {
-                let (seq_idx, pos_in_seq) = self
-                    .map_position(text_pos)
-                    .expect("resolved SA position must be within text bounds");
-                (self.seq_headers[seq_idx as usize].clone(), pos_in_seq)
+                self.map_position(text_pos)
+                    .expect("resolved SA position must be within text bounds")
             })
             .collect()
     }

@@ -204,6 +204,31 @@ impl FmIndex {
         self.num_sequences
     }
 
+    /// FASTA headers of every indexed reference, in build order.
+    ///
+    /// The position of a header in this slice is its **sequence id**: the integer
+    /// returned by [`locate_ids`](Self::locate_ids) and by the `_ids` MEM/SMEM
+    /// variants on [`BidirFmIndex`](crate::BidirFmIndex). Ids are assigned in build
+    /// order and are preserved by [`to_bytes`](Self::to_bytes) /
+    /// [`from_bytes`](Self::from_bytes), so a caller can build an `id -> label` table
+    /// once at load time and index it by `usize` thereafter.
+    pub fn seq_headers(&self) -> &[String] {
+        &self.seq_headers
+    }
+
+    /// Header for a 0-based sequence id, or `None` when `id` is out of range.
+    pub fn seq_header(&self, id: usize) -> Option<&str> {
+        self.seq_headers.get(id).map(String::as_str)
+    }
+
+    /// Id for a header, or `None` when no reference carries it.
+    ///
+    /// O(n) linear scan, intended for one-off lookups. To map many headers, build a
+    /// map from [`seq_headers`](Self::seq_headers) instead of calling this per header.
+    pub fn seq_id(&self, header: &str) -> Option<usize> {
+        self.seq_headers.iter().position(|h| h == header)
+    }
+
     /// Build an FM-index from a set of DNA sequences using GPU acceleration.
     #[cfg(feature = "gpu")]
     pub async fn build(
