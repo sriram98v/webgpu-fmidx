@@ -4,7 +4,7 @@
 #[cfg(feature = "gpu")]
 mod tests {
     use haystackfm::alphabet::DnaSequence;
-    use haystackfm::{BidirFmIndex, FmIndexConfig, MemHit};
+    use haystackfm::{BidirFmIndex, FmIndexConfig, MemHit, SeqId};
     use pollster::FutureExt as _;
     use std::collections::HashSet;
 
@@ -28,28 +28,19 @@ mod tests {
         DnaSequence::from_str(s).unwrap()
     }
 
-    /// Parse "seq_N" → N.
-    fn seq_name_to_id(name: &str) -> u32 {
-        name.strip_prefix("seq_")
-            .and_then(|n| n.parse().ok())
-            .unwrap_or(0)
-    }
-
     /// CPU oracle: find MEMs then locate each one. Returns sorted vec of
     /// (query_start, query_end, sorted_positions).
+    ///
+    /// CPU and GPU positions are both `(SeqId, u32)`, so they compare directly.
     fn cpu_mems_with_positions(
         idx: &BidirFmIndex,
         query: &[u8],
         min_len: usize,
-    ) -> Vec<(usize, usize, HashSet<(u32, u32)>)> {
+    ) -> Vec<(usize, usize, HashSet<(SeqId, u32)>)> {
         idx.find_mems(query, min_len, true)
             .into_iter()
             .map(|m| {
-                let positions: HashSet<(u32, u32)> = m
-                    .positions
-                    .iter()
-                    .map(|(name, off)| (seq_name_to_id(name), *off))
-                    .collect();
+                let positions: HashSet<(SeqId, u32)> = m.positions.iter().copied().collect();
                 (m.query_start, m.query_end, positions)
             })
             .collect()
@@ -59,31 +50,27 @@ mod tests {
         idx: &BidirFmIndex,
         query: &[u8],
         min_len: usize,
-    ) -> Vec<(usize, usize, HashSet<(u32, u32)>)> {
+    ) -> Vec<(usize, usize, HashSet<(SeqId, u32)>)> {
         idx.find_smems(query, min_len, true)
             .into_iter()
             .map(|m| {
-                let positions: HashSet<(u32, u32)> = m
-                    .positions
-                    .iter()
-                    .map(|(name, off)| (seq_name_to_id(name), *off))
-                    .collect();
+                let positions: HashSet<(SeqId, u32)> = m.positions.iter().copied().collect();
                 (m.query_start, m.query_end, positions)
             })
             .collect()
     }
 
     /// GPU results as comparable structure.
-    fn gpu_mems_with_positions(hits: &[MemHit]) -> Vec<(usize, usize, HashSet<(u32, u32)>)> {
+    fn gpu_mems_with_positions(hits: &[MemHit]) -> Vec<(usize, usize, HashSet<(SeqId, u32)>)> {
         hits.iter()
             .map(|h| {
-                let positions: HashSet<(u32, u32)> = h.positions.iter().copied().collect();
+                let positions: HashSet<(SeqId, u32)> = h.positions.iter().copied().collect();
                 (h.query_start as usize, h.query_end as usize, positions)
             })
             .collect()
     }
 
-    fn sort_mem_tuples(v: &mut Vec<(usize, usize, HashSet<(u32, u32)>)>) {
+    fn sort_mem_tuples(v: &mut Vec<(usize, usize, HashSet<(SeqId, u32)>)>) {
         v.sort_by_key(|(qs, qe, _)| (*qs, *qe));
     }
 

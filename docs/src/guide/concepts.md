@@ -37,6 +37,43 @@ into a text coordinate. Storing the whole SA would defeat compression, so haysta
 it every *k* positions (`sa_sample_rate`) and **LF-walks** from an unsampled position until
 it lands on a sample — trading a little query time for a much smaller index.
 
+## Sequence ids vs. headers
+
+An index is built over several reference sequences concatenated into one text, so every
+result has to say *which* reference it came from. haystackfm keeps two distinct things
+apart here:
+
+- A **header** is the FASTA name of a reference — `"chr1"`, `"NC_045512.2"`. It is what a
+  human reads, and it is a `String`.
+- A **`SeqId`** is that reference's position in build order — the first sequence you pass to
+  the builder is `SeqId(0)`. It is a `u32`.
+
+**Queries only ever report `SeqId`.** Locating an occurrence yields `(SeqId, offset)`, never
+a header. This matters because locate cost is *per occurrence*: a seed conserved across
+hundreds of references produces hundreds of hits, and cloning a header string for each one —
+only for the caller to look it up again — is pure overhead. Returning the integer lets a
+caller index a `Vec` directly.
+
+Translating between the two is a separate, O(1) step:
+
+```rust
+index.seq_header(id)   // Option<&str>   — id  -> header
+index.seq_id(header)   // Option<SeqId>  — header -> id
+index.seq_headers()    // &[String]      — every header, indexed by SeqId::index()
+```
+
+The usual pattern is to build whatever label table you need *once* at load time from
+`seq_headers()`, then index it by `SeqId::index()` per hit.
+
+Ids are stable: they are assigned in build order and preserved across `to_bytes` /
+`from_bytes`, so an id recorded against one load of an index still means the same reference
+after a reload. They are *not* portable across differently-built indexes — reordering or
+adding sequences renumbers everything.
+
+Because `seq_id` must be an unambiguous inverse, **headers must be unique**: a collision
+fails the build with `FmIndexError::DuplicateHeader`. Sequences supplied without a header are
+auto-named `seq_{i}` in build order.
+
 ## Bidirectional index
 
 Maximal Exact Match (MEM) and Super-Maximal Exact Match (SMEM) finding need to extend a

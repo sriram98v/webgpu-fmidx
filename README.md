@@ -49,7 +49,7 @@ let index = FmIndex::build_cpu(&[seq], &config)?;
 // Encode a query pattern (a DnaSequence holds the IUPAC-encoded bytes).
 let query = DnaSequence::from_str("ACGT")?;
 assert_eq!(index.count(query.as_slice()), 2);
-let positions = index.locate(query.as_slice()); // Vec<(String, u32)> — (seq name, offset)
+let positions = index.locate(query.as_slice()); // Vec<(SeqId, u32)> — (seq id, offset)
 ```
 
 ### Native — GPU (Vulkan / Metal / DX12)
@@ -122,6 +122,9 @@ const handle = await builder.build_gpu();    // or builder.build_cpu()
 
 console.log(handle.count("ACGT"));           // number of occurrences
 console.log(handle.locate("ACGT"));          // Array of [seqId, offset] pairs
+console.log(handle.seq_header(0));           // header for a sequence id — O(1)
+console.log(handle.seq_id("seq1"));          // id for a header — O(1)
+console.log(handle.seq_headers());           // all headers, indexed by seq id
 console.log(handle.text_len());              // total text length
 console.log(handle.num_sequences());         // number of indexed sequences
 
@@ -141,11 +144,16 @@ FmIndex::build_cpu(sequences, config)?          // sync, CPU, IupacDna alphabet 
 FmIndex::build_cpu_with::<ExactDna>(sequences, config)?  // sync, CPU, custom alphabet
 FmIndex::build(sequences, config).await?        // async, GPU (feature = "gpu")
 
-// Query
+// Query — matches are reported as (SeqId, offset); no String is allocated per hit
 index.count(pattern)                            // u32 — number of occurrences
-index.locate(pattern)                           // Vec<(String, u32)> — (seq name, offset)
+index.locate(pattern)                           // Vec<(SeqId, u32)> — (seq id, offset)
 index.text_len()                                // u32
 index.num_sequences()                           // u32
+
+// Sequence ids — 0-based, in build order, stable across to_bytes/from_bytes
+index.seq_headers()                             // &[String] — index by SeqId::index()
+index.seq_header(id)                            // Option<&str>  — O(1)
+index.seq_id(header)                            // Option<SeqId> — O(1)
 
 // Persistence
 index.to_bytes()?                               // Vec<u8>
@@ -162,11 +170,33 @@ BidirFmIndex::build_cpu_with::<ExactDna>(sequences, config)?  // custom alphabet
 bidir.find_smems(query, min_len, locate)        // Vec<Mem>
 bidir.find_mems(query, min_len, locate)         // Vec<Mem>
 
+// Resolve reported ids to headers (both O(1))
+bidir.seq_headers() / seq_header(id) / seq_id(header)
+
 // GPU MEM finding (feature = "gpu"); `queries: &[DnaSequence]`,
 // `ref_boundaries` from `bidir.seq_boundaries()`, GPU context from the cache
 bidir.find_smems_gpu(queries, min_len, ref_boundaries, max_hits_per_mem).await?  // Vec<Vec<MemHit>>
 bidir.find_mems_gpu(queries,  min_len, ref_boundaries, max_hits_per_mem).await?  // Vec<Vec<MemHit>>
 ```
+
+### `SeqId`
+
+```rust
+pub struct SeqId(pub u32);        // 0-based, in build order, stable across serialization
+impl SeqId {
+    pub const fn new(id: u32) -> Self;
+    pub const fn get(self) -> u32;
+    pub const fn index(self) -> usize;   // for indexing seq_headers() or your own table
+}
+```
+
+Every query reports match locations as `(SeqId, offset)` — the index never allocates a
+header string per occurrence. Build an `id -> label` table once from `seq_headers()` at load
+time and index it by `SeqId::index()`, or resolve individual ids with `seq_header()`.
+
+Headers must be unique: a duplicate raises `FmIndexError::DuplicateHeader` at build time,
+which is what makes `seq_id()` an exact inverse of `seq_header()`. Sequences supplied
+without a header are named `seq_{i}` in build order.
 
 ### `Mem` / `MemHit`
 
@@ -175,14 +205,14 @@ pub struct Mem {
     pub query_start: usize,       // 0-based inclusive
     pub query_end:   usize,       // 0-based exclusive
     pub match_count: u32,         // SA interval size
-    pub positions:   Vec<(String, u32)>, // (seq name, offset) — empty when locate=false
+    pub positions:   Vec<(SeqId, u32)>, // (seq id, offset) — empty when locate=false
 }
 
 pub struct MemHit {               // GPU result type
     pub query_start: u32,
     pub query_end:   u32,
     pub match_count: u32,
-    pub positions:   Vec<(u32, u32)>, // (ref_id, offset_within_ref)
+    pub positions:   Vec<(SeqId, u32)>, // same shape as Mem::positions
     pub truncated:   bool,        // true if positions capped at max_hits_per_mem
 }
 ```

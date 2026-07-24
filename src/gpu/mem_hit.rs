@@ -1,3 +1,5 @@
+use crate::fm_index::seq_id::SeqId;
+
 /// A Maximal Exact Match with GPU-resolved reference positions.
 ///
 /// Returned by [`crate::BidirFmIndex::find_smems_gpu`] and [`crate::BidirFmIndex::find_mems_gpu`].
@@ -10,10 +12,11 @@ pub struct MemHit {
     pub query_end: u32,
     /// Number of occurrences in the reference (SA interval size).
     pub match_count: u32,
-    /// Reference positions: `(ref_id, offset_within_ref)`.
+    /// Reference positions: `(sequence_id, offset_within_ref)`.
     /// At most `max_hits_per_mem` entries (default 1024).
-    /// `ref_id` is the 0-based index into the reference list passed at index build time.
-    pub positions: Vec<(u32, u32)>,
+    /// Same shape as [`Mem::positions`](crate::Mem::positions) on the CPU path, so CPU and
+    /// GPU results can be consumed by the same code.
+    pub positions: Vec<(SeqId, u32)>,
     /// True if the hit list was truncated due to `max_hits_per_mem`.
     pub truncated: bool,
 }

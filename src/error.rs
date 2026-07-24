@@ -11,6 +11,10 @@ pub enum FmIndexError {
     #[error("empty sequence")]
     EmptySequence,
 
+    /// Two sequences share a FASTA header, making the header -> id lookup ambiguous.
+    #[error("duplicate sequence header '{0}': headers must be unique")]
+    DuplicateHeader(String),
+
     /// The combined text length exceeds the `u32::MAX` limit.
     #[error("text too large: {0} bytes exceeds u32::MAX")]
     TextTooLarge(usize),

@@ -5,7 +5,7 @@
 mod tests {
     use haystackfm::alphabet::encode_char;
     use haystackfm::error::FmIndexError;
-    use haystackfm::{DnaSequence, FmIndex, FmIndexConfig};
+    use haystackfm::{DnaSequence, FmIndex, FmIndexConfig, SeqId};
     use pollster::FutureExt as _;
 
     fn cpu_config() -> FmIndexConfig {
@@ -20,7 +20,7 @@ mod tests {
         s.chars().map(|c| encode_char(c).unwrap()).collect()
     }
 
-    fn sorted_hits(mut v: Vec<(String, u32)>) -> Vec<(String, u32)> {
+    fn sorted_hits(mut v: Vec<(SeqId, u32)>) -> Vec<(SeqId, u32)> {
         v.sort();
         v
     }
@@ -34,7 +34,7 @@ mod tests {
     }
 
     /// Returns `None` when no GPU adapter is available (caller should skip).
-    fn try_locate_gpu(idx: &FmIndex, queries: &[Vec<u8>]) -> Option<Vec<Vec<(String, u32)>>> {
+    fn try_locate_gpu(idx: &FmIndex, queries: &[Vec<u8>]) -> Option<Vec<Vec<(SeqId, u32)>>> {
         let refs: Vec<&[u8]> = queries.iter().map(|q| q.as_slice()).collect();
         match idx.locate_gpu(&refs).block_on() {
             Ok(r) => Some(r),
@@ -182,7 +182,7 @@ mod tests {
     fn batch_exact_and_iupac() {
         let idx = build(&["ACGTACGT"]);
         let patterns = vec![encode("ACG"), encode("N"), encode("RY"), encode("ACGT")];
-        let cpu_results: Vec<Vec<(String, u32)>> = patterns.iter().map(|p| idx.locate(p)).collect();
+        let cpu_results: Vec<Vec<(SeqId, u32)>> = patterns.iter().map(|p| idx.locate(p)).collect();
         let Some(gpu_results) = try_locate_gpu(&idx, &patterns) else {
             return;
         };

@@ -1,6 +1,7 @@
 use wasm_bindgen::prelude::*;
 
 use crate::alphabet::DnaSequence;
+use crate::fm_index::seq_id::SeqId;
 use crate::fm_index::{FmIndex, FmIndexConfig};
 
 /// Convert any error type to JsValue for wasm-bindgen.
@@ -170,19 +171,40 @@ impl FmIndexHandle {
 
     /// Locate all occurrences of `pattern`.
     ///
-    /// Returns a JS `Array` of `[sequenceId, position]` pairs, where `sequenceId`
-    /// is the FASTA header string and `position` is 0-based within that sequence.
+    /// Returns a JS `Array` of `[sequenceId, position]` pairs, where `sequenceId` is the
+    /// 0-based index of the sequence in build order and `position` is 0-based within that
+    /// sequence. No header string is allocated per hit — resolve ids to headers with
+    /// `seq_header`, or read them all once from `seq_headers`.
     pub fn locate(&self, pattern: &str) -> Result<js_sys::Array, JsValue> {
         let encoded = encode_pattern(pattern)?;
         let hits = self.index.locate(&encoded);
         let result = js_sys::Array::new_with_length(hits.len() as u32);
         for (i, (seq_id, pos)) in hits.into_iter().enumerate() {
             let pair = js_sys::Array::new_with_length(2);
-            pair.set(0, wasm_bindgen::JsValue::from_str(&seq_id));
+            pair.set(0, wasm_bindgen::JsValue::from_f64(seq_id.get() as f64));
             pair.set(1, wasm_bindgen::JsValue::from_f64(pos as f64));
             result.set(i as u32, pair.into());
         }
         Ok(result)
+    }
+
+    /// FASTA header for a 0-based sequence id, or `undefined` if out of range. O(1).
+    pub fn seq_header(&self, id: u32) -> Option<String> {
+        self.index.seq_header(SeqId::new(id)).map(str::to_owned)
+    }
+
+    /// Id for a FASTA header, or `undefined` if no sequence carries it. O(1).
+    pub fn seq_id(&self, header: &str) -> Option<u32> {
+        self.index.seq_id(header).map(SeqId::get)
+    }
+
+    /// Every FASTA header, in build order — index into it by sequence id.
+    pub fn seq_headers(&self) -> js_sys::Array {
+        self.index
+            .seq_headers()
+            .iter()
+            .map(|h| wasm_bindgen::JsValue::from_str(h))
+            .collect()
     }
 
     /// Total length of the indexed text (including per-sequence sentinel characters).

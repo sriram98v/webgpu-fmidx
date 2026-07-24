@@ -2,6 +2,7 @@ pub mod bidir;
 pub mod bidir_index;
 pub mod lookup;
 pub mod query;
+pub mod seq_id;
 pub mod serialize;
 pub mod smem;
 
@@ -10,6 +11,7 @@ use crate::bwt::cpu::build_bwt;
 use crate::c_array::CArray;
 use crate::error::FmIndexError;
 use crate::fm_index::lookup::LookupTable;
+use crate::fm_index::seq_id::{HeaderIndex, SeqId};
 use crate::occ::cpu::build_occ_table;
 use crate::occ::{OccEncoding, OccTable};
 use crate::suffix_array::cpu::build_suffix_array;
@@ -64,7 +66,10 @@ pub struct FmIndex {
     /// Cumulative sequence lengths for mapping positions back to sequences.
     pub(crate) seq_boundaries: Vec<u32>,
     /// FASTA headers for each sequence (index-parallel with seq_boundaries).
+    /// A sequence's position here is its [`SeqId`].
     pub(crate) seq_headers: Vec<String>,
+    /// O(1) reverse lookup for `seq_headers`. Derived, not serialized.
+    pub(crate) header_index: HeaderIndex,
     /// Optional depth-k prefix lookup table for seeding backward search.
     pub(crate) lookup: Option<LookupTable>,
     /// Alphabet matching semantics (compatible symbols + core symbols for lookup BFS).
@@ -135,6 +140,9 @@ impl FmIndex {
                 }
             })
             .collect();
+        // Built before the suffix array so a duplicate header fails fast rather than after
+        // the expensive construction passes.
+        let header_index = HeaderIndex::build(&seq_headers)?;
 
         // C array from text before SA construction — BWT is a permutation of text,
         // so character frequencies are identical. Avoids a second n-byte scan of BWT.
@@ -189,6 +197,7 @@ impl FmIndex {
             num_sequences,
             seq_boundaries,
             seq_headers,
+            header_index,
             lookup,
             alphabet_fns,
         })
@@ -202,6 +211,29 @@ impl FmIndex {
     /// Number of sequences indexed.
     pub fn num_sequences(&self) -> u32 {
         self.num_sequences
+    }
+
+    /// FASTA headers of every indexed reference, in build order.
+    ///
+    /// A header's position in this slice is its [`SeqId`]. Ids are preserved by
+    /// [`to_bytes`](Self::to_bytes) / [`from_bytes`](Self::from_bytes), so a caller can
+    /// build an `id -> label` table from this slice once at load time and index it by
+    /// [`SeqId::index`] thereafter.
+    pub fn seq_headers(&self) -> &[String] {
+        &self.seq_headers
+    }
+
+    /// Header for a sequence id, or `None` when the id is out of range. O(1).
+    pub fn seq_header(&self, id: SeqId) -> Option<&str> {
+        self.seq_headers.get(id.index()).map(String::as_str)
+    }
+
+    /// Id for a header, or `None` when no reference carries it. O(1).
+    ///
+    /// Headers are unique — [`FmIndexError::DuplicateHeader`] is raised at build time
+    /// otherwise — so this is an exact inverse of [`seq_header`](Self::seq_header).
+    pub fn seq_id(&self, header: &str) -> Option<SeqId> {
+        self.header_index.get(header)
     }
 
     /// Build an FM-index from a set of DNA sequences using GPU acceleration.
@@ -235,6 +267,9 @@ impl FmIndex {
                 }
             })
             .collect();
+        // Built before the suffix array so a duplicate header fails fast rather than after
+        // the expensive construction passes.
+        let header_index = HeaderIndex::build(&seq_headers)?;
 
         let ctx = GpuContext::new().await?;
         let sa_pipelines = SaPipelines::new(&ctx);
@@ -277,6 +312,7 @@ impl FmIndex {
             num_sequences,
             seq_boundaries,
             seq_headers,
+            header_index,
             lookup: None,
             // GPU construction is IUPAC-only (shaders hard-code the 16-symbol COMPAT table).
             alphabet_fns: IupacDna::fns(),

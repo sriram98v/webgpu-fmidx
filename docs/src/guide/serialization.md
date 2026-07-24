@@ -14,6 +14,17 @@ let restored = FmIndex::from_bytes(&bytes)?; // FmIndex
 serialization tag, so a reloaded index keeps the matching semantics it was built with (see
 [Custom Alphabets](./alphabets.md)).
 
+## Sequence ids are stable
+
+The headers are stored in build order, so a
+[`SeqId`](./concepts.md#sequence-ids-vs-headers) means the same reference before and after a
+round trip — you can record ids against a serialized index and reuse them on reload. (The
+header -> id map is derived from the header list rather than stored, so `from_bytes` rebuilds
+it; this is invisible to callers.)
+
+Ids are only meaningful *within* one index. A differently-built index — sequences added,
+removed, or reordered — renumbers them; match on headers when crossing that boundary.
+
 ## JavaScript / TypeScript
 
 ```typescript

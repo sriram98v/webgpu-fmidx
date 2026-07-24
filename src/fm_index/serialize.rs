@@ -5,6 +5,7 @@ use crate::alphabet::alphabet_fns_from_tag;
 use crate::c_array::CArray;
 use crate::error::FmIndexError;
 use crate::fm_index::lookup::LookupTable;
+use crate::fm_index::seq_id::HeaderIndex;
 use crate::occ::OccTable;
 use crate::suffix_array::SampledSuffixArray;
 
@@ -29,6 +30,10 @@ impl FmIndex {
     ///
     /// The alphabet tag stored in the bytes is used to reconstruct the matching
     /// semantics. Returns [`FmIndexError::DeserializeError`] for unknown tags.
+    ///
+    /// The header -> [`SeqId`](crate::SeqId) map is a pure function of the stored headers,
+    /// so it is rebuilt here rather than serialized. Sequence ids are the stored header
+    /// order and therefore identical to those of the index that was serialized.
     pub fn from_bytes(data: &[u8]) -> Result<Self, FmIndexError> {
         let deserialized: OwnedSerializableFmIndex = bincode::deserialize(data)
             .map_err(|e| FmIndexError::DeserializeError(e.to_string()))?;
@@ -38,7 +43,9 @@ impl FmIndex {
                 deserialized.alphabet_tag
             ))
         })?;
+        let header_index = HeaderIndex::build(&deserialized.seq_headers)?;
         Ok(Self {
+            header_index,
             c_array: deserialized.c_array,
             occ: deserialized.occ,
             sa_samples: deserialized.sa_samples,

@@ -1,5 +1,6 @@
 use crate::fm_index::bidir::BidirInterval;
 use crate::fm_index::bidir_index::BidirFmIndex;
+use crate::fm_index::seq_id::SeqId;
 use crate::fm_index::FmIndex;
 
 /// A Maximal Exact Match (MEM) between a query and the indexed reference.
@@ -23,8 +24,12 @@ pub struct Mem {
     /// Number of occurrences in the reference text.
     pub match_count: u32,
     /// Reference positions (populated only when `locate = true`).
-    /// Each entry is `(sequence_id, position_within_sequence)`.
-    pub positions: Vec<(String, u32)>,
+    ///
+    /// Each entry is `(sequence_id, position_within_sequence)`. Resolve a [`SeqId`] to its
+    /// FASTA header with [`BidirFmIndex::seq_header`] — no string is allocated per
+    /// occurrence. Same shape as `MemHit::positions` on the GPU path (feature `gpu`), so
+    /// CPU and GPU results can be consumed by the same code.
+    pub positions: Vec<(SeqId, u32)>,
 }
 
 impl Mem {
@@ -69,6 +74,14 @@ impl BidirFmIndex {
     /// SMEMs in order of increasing `query_start`.  Duplicate `(start, end)` pairs
     /// are deduplicated.
     pub fn find_smems(&self, query: &[u8], min_len: usize, locate: bool) -> Vec<Mem> {
+        self.smem_raws(query, min_len)
+            .into_iter()
+            .map(|raw| self.locate_raw(raw, locate))
+            .collect()
+    }
+
+    /// The SMEMs of `query` as unresolved [`RawMem`]s.
+    fn smem_raws(&self, query: &[u8], min_len: usize) -> Vec<RawMem> {
         if query.is_empty() || min_len == 0 {
             return vec![];
         }
@@ -97,7 +110,7 @@ impl BidirFmIndex {
                 .enumerate()
                 .any(|(j, &(s2, e2))| j != idx && s2 <= s && e <= e2 && (s2, e2) != (s, e));
             if !contained {
-                smems.push(self.locate_raw(raw, locate));
+                smems.push(raw);
             }
         }
         smems
@@ -111,6 +124,14 @@ impl BidirFmIndex {
     ///
     /// Complexity: O(|query|² × α).
     pub fn find_mems(&self, query: &[u8], min_len: usize, locate: bool) -> Vec<Mem> {
+        self.mem_raws(query, min_len)
+            .into_iter()
+            .map(|raw| self.locate_raw(raw, locate))
+            .collect()
+    }
+
+    /// The MEMs of `query` as unresolved [`RawMem`]s.
+    fn mem_raws(&self, query: &[u8], min_len: usize) -> Vec<RawMem> {
         if query.is_empty() || min_len == 0 {
             return vec![];
         }
@@ -118,9 +139,7 @@ impl BidirFmIndex {
         let mut raws = self.collect_raw_mems(query, min_len);
         raws.sort_by_key(|m| (m.query_start, m.query_end));
         raws.dedup_by_key(|m| (m.query_start, m.query_end));
-        raws.into_iter()
-            .map(|raw| self.locate_raw(raw, locate))
-            .collect()
+        raws
     }
 
     /// Find the right-maximal, left-maximal seed starting at query position `i`.
@@ -429,10 +448,7 @@ mod tests {
         assert_eq!(smems.len(), 1);
         let mut positions = smems[0].positions.clone();
         positions.sort();
-        assert_eq!(
-            positions,
-            vec![("seq_0".to_string(), 0), ("seq_0".to_string(), 4)]
-        );
+        assert_eq!(positions, vec![(SeqId::new(0), 0), (SeqId::new(0), 4)]);
     }
 
     #[test]
@@ -760,8 +776,11 @@ mod tests {
         let mems = idx.find_mems(&q, 19, true);
 
         let hits = |ms: &[Mem], header: &str| {
-            ms.iter()
-                .any(|m| m.positions.iter().any(|(h, _)| h == header))
+            ms.iter().any(|m| {
+                m.positions
+                    .iter()
+                    .any(|&(id, _)| idx.seq_header(id) == Some(header))
+            })
         };
 
         // find_mems already finds REF_CORRECT (sanity: index content is correct).
@@ -790,9 +809,11 @@ mod tests {
         let smems = idx.find_smems(&q, 19, true);
 
         let hits = |header: &str| {
-            smems
-                .iter()
-                .any(|m| m.positions.iter().any(|(h, _)| h == header))
+            smems.iter().any(|m| {
+                m.positions
+                    .iter()
+                    .any(|&(id, _)| idx.seq_header(id) == Some(header))
+            })
         };
         assert!(hits("REF_LONG"), "dropped the leading long SMEM");
         assert!(hits("REF_SHORT"), "dropped the trailing short SMEM");

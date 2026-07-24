@@ -1,5 +1,5 @@
 use haystackfm::alphabet::encode_char;
-use haystackfm::{DnaSequence, FmIndex, FmIndexConfig};
+use haystackfm::{DnaSequence, FmIndex, FmIndexConfig, SeqId};
 /// Property-based correctness tests for the FM-index.
 ///
 /// Inspired by genedex (https://github.com/feldroop/genedex). For every randomly
@@ -55,16 +55,16 @@ fn naive_positions(text: &str, pattern: &str) -> Vec<u32> {
         .collect()
 }
 
-/// Brute-force hits across multiple sequences → `(header, position)` set.
-fn naive_hits_multi(texts: &[String], pattern: &str) -> HashSet<(String, u32)> {
+/// Brute-force hits across multiple sequences → `(seq_id, position)` set.
+fn naive_hits_multi(texts: &[String], pattern: &str) -> HashSet<(SeqId, u32)> {
     texts
         .iter()
         .enumerate()
         .flat_map(|(i, text)| {
-            let header = format!("seq_{i}");
+            let id = SeqId::new(i as u32);
             naive_positions(text, pattern)
                 .into_iter()
-                .map(move |p| (header.clone(), p))
+                .map(move |p| (id, p))
         })
         .collect()
 }
@@ -120,23 +120,45 @@ proptest! {
         );
     }
 
-    /// `locate` must return exactly the right `(header, position)` pairs across
-    /// multiple sequences.
+    /// `locate` must return exactly the right `(seq_id, position)` pairs across
+    /// multiple sequences, at any SA sampling rate.
     #[test]
     fn locate_correct_multi_sequence(
         texts in prop::collection::vec(dna_string(200), 1..=5),
         pattern in dna_string(10),
+        sa_sample_rate in 1usize..=32,
     ) {
-        let idx = build_index(&texts, 1);
+        let idx = build_index(&texts, sa_sample_rate);
         let pat = encode_pat(&pattern);
 
-        let fm_hits: HashSet<(String, u32)> = idx.locate(&pat).into_iter().collect();
+        let fm_hits: HashSet<(SeqId, u32)> = idx.locate(&pat).into_iter().collect();
         let expected = naive_hits_multi(&texts, &pattern);
 
         prop_assert_eq!(
             fm_hits, expected,
-            "multi-seq locate mismatch | pattern='{}'", pattern
+            "multi-seq locate mismatch | pattern='{}' rate={}", pattern, sa_sample_rate
         );
+    }
+
+    /// The header <-> id accessors must be exact inverses for every indexed sequence,
+    /// and every located id must be in range.
+    #[test]
+    fn seq_id_and_seq_header_are_inverses(
+        texts in prop::collection::vec(dna_string(200), 1..=5),
+        pattern in dna_string(10),
+    ) {
+        let idx = build_index(&texts, 1);
+
+        for i in 0..texts.len() {
+            let id = SeqId::new(i as u32);
+            let header = idx.seq_header(id).expect("id in range must have a header");
+            prop_assert_eq!(idx.seq_id(header), Some(id));
+        }
+        prop_assert_eq!(idx.seq_header(SeqId::new(texts.len() as u32)), None);
+
+        for (id, _) in idx.locate(&encode_pat(&pattern)) {
+            prop_assert!(id.index() < texts.len(), "located id {} out of range", id);
+        }
     }
 
     /// `locate` must return exact positions regardless of SA sampling rate.
@@ -217,7 +239,7 @@ fn pattern_equals_text() {
     let pat = encode_pat(&text);
     assert_eq!(idx.count(&pat), 1);
     let hits = idx.locate(&pat);
-    assert_eq!(hits, vec![("seq_0".to_string(), 0)]);
+    assert_eq!(hits, vec![(SeqId::new(0), 0)]);
 }
 
 #[test]
@@ -232,20 +254,26 @@ fn overlapping_pattern_count_correct() {
 }
 
 #[test]
-fn multi_seq_headers_correct() {
+fn multi_seq_ids_correct() {
     let texts = vec!["ACGT".to_string(), "TTTT".to_string(), "GGGG".to_string()];
     let idx = build_index(&texts, 1);
 
-    let a_hits: HashSet<(String, u32)> = idx.locate(&encode_pat("A")).into_iter().collect();
-    assert_eq!(a_hits, [("seq_0".to_string(), 0)].into_iter().collect());
-
-    let t_hits: HashSet<(String, u32)> = idx.locate(&encode_pat("T")).into_iter().collect();
-    // "ACGT" has T at 3, "TTTT" has T at 0,1,2,3
-    assert!(t_hits.contains(&("seq_0".to_string(), 3)));
-    for p in 0..4u32 {
-        assert!(t_hits.contains(&("seq_1".to_string(), p)));
+    for (i, expected) in ["seq_0", "seq_1", "seq_2"].iter().enumerate() {
+        let id = SeqId::new(i as u32);
+        assert_eq!(idx.seq_header(id), Some(*expected));
+        assert_eq!(idx.seq_id(expected), Some(id));
     }
-    assert!(!t_hits.iter().any(|(h, _)| h == "seq_2"));
+
+    let a_hits: HashSet<(SeqId, u32)> = idx.locate(&encode_pat("A")).into_iter().collect();
+    assert_eq!(a_hits, [(SeqId::new(0), 0)].into_iter().collect());
+
+    let t_hits: HashSet<(SeqId, u32)> = idx.locate(&encode_pat("T")).into_iter().collect();
+    // "ACGT" has T at 3, "TTTT" has T at 0,1,2,3, "GGGG" has none.
+    assert!(t_hits.contains(&(SeqId::new(0), 3)));
+    for p in 0..4u32 {
+        assert!(t_hits.contains(&(SeqId::new(1), p)));
+    }
+    assert!(!t_hits.iter().any(|&(id, _)| id == SeqId::new(2)));
 }
 
 #[test]
