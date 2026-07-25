@@ -66,7 +66,7 @@ impl BidirFmIndex {
 
         // Reverse index: built on the byte-reversal of the same concatenated text.
         let rev_seq = reverse_as_sequence(&text)?;
-        let rev = FmIndex::build_cpu_with::<A>(
+        let mut rev = FmIndex::build_cpu_with::<A>(
             &[rev_seq],
             &FmIndexConfig {
                 sa_sample_rate: config.sa_sample_rate,
@@ -76,6 +76,10 @@ impl BidirFmIndex {
                 occ_encoding: config.occ_encoding,
             },
         )?;
+        // The reverse index's text is just the reversal of the forward one and is never
+        // served through `sequence()` (all accessors delegate to `fwd`). Free it rather
+        // than carry — and serialize — a second copy of the whole text.
+        rev.forget_text();
 
         Ok(Self { fwd, rev })
     }
@@ -111,7 +115,9 @@ impl BidirFmIndex {
         // Build sequentially: both paths share the GPU device pool and
         // concurrent init would contend for it.
         let fwd = FmIndex::build(sequences, config).await?;
-        let rev = FmIndex::build(&[rev_seq], &rev_config).await?;
+        let mut rev = FmIndex::build(&[rev_seq], &rev_config).await?;
+        // See `build_cpu_with`: the reverse text is redundant and never served.
+        rev.forget_text();
 
         Ok(Self { fwd, rev })
     }
@@ -199,6 +205,28 @@ impl BidirFmIndex {
     /// otherwise — so this is an exact inverse of [`seq_header`](Self::seq_header).
     pub fn seq_id(&self, header: &str) -> Option<SeqId> {
         self.fwd.seq_id(header)
+    }
+
+    /// Bases of one indexed sequence, or `None` when the id is out of range.
+    ///
+    /// O(1) — a borrowed slice of the retained text, with the trailing sentinel excluded.
+    /// An aligner rescoring a read against a candidate diagonal can take its substring
+    /// from here rather than keeping a second copy of every reference alongside the index.
+    ///
+    /// The bases are **alphabet codes**, not ASCII: `A = 1`, `C = 2`, `G = 3`, `T = 4`,
+    /// `N = 5`, and so on (see [`crate::alphabet`]). Use [`crate::alphabet::decode_char`]
+    /// to render them, or [`crate::alphabet::encode_byte`] to bring a query into the same
+    /// space before comparing.
+    pub fn sequence(&self, id: SeqId) -> Option<&[u8]> {
+        self.fwd.sequence(id)
+    }
+
+    /// Bases of the sequence carrying `header`, or `None` when no reference carries it.
+    ///
+    /// Equivalent to `seq_id(header).and_then(|id| self.sequence(id))`; see
+    /// [`sequence`](Self::sequence) for the encoding of the returned bases.
+    pub fn sequence_by_header(&self, header: &str) -> Option<&[u8]> {
+        self.fwd.sequence_by_header(header)
     }
 
     // ── Serialization ─────────────────────────────────────────────────────────
@@ -573,11 +601,97 @@ mod tests {
         BidirFmIndex::build_cpu(&[DnaSequence::from_str(s).unwrap()], &config).unwrap()
     }
 
+    fn bidir_multi(seqs: &[(&str, &str)]) -> BidirFmIndex {
+        let config = FmIndexConfig {
+            sa_sample_rate: 1,
+            use_gpu: false,
+            ..Default::default()
+        };
+        let sequences: Vec<DnaSequence> = seqs
+            .iter()
+            .map(|(s, h)| DnaSequence::from_str_with_header(s, h).unwrap())
+            .collect();
+        BidirFmIndex::build_cpu(&sequences, &config).unwrap()
+    }
+
     #[test]
     fn full_interval_covers_all() {
         let idx = bidir("ACGTACGT");
         let iv = idx.full_interval();
         assert_eq!(iv.size(), idx.text_len());
+    }
+
+    #[test]
+    fn sequence_round_trips_every_reference() {
+        // Deliberately different lengths so a boundary off-by-one cannot pass by luck.
+        let refs = [
+            ("ACGTACGTAC", "chr1"),
+            ("TTGCA", "chr2"),
+            ("GGGGNNNNCCCCAAAA", "chr3"),
+        ];
+        let idx = bidir_multi(&refs);
+
+        for (i, (bases, _)) in refs.iter().enumerate() {
+            let got = idx.sequence(SeqId::new(i as u32)).expect("id is in range");
+            assert_eq!(got, encode(bases).as_slice(), "sequence {i} mismatch");
+        }
+    }
+
+    #[test]
+    fn sequence_excludes_the_sentinel() {
+        let idx = bidir_multi(&[("ACGT", "a"), ("TTTT", "b")]);
+        for i in 0..idx.num_sequences() {
+            let seq = idx.sequence(SeqId::new(i)).unwrap();
+            assert!(
+                !seq.contains(&crate::alphabet::SENTINEL),
+                "sequence {i} leaked its separator"
+            );
+        }
+    }
+
+    #[test]
+    fn sequence_out_of_range_is_none() {
+        let idx = bidir_multi(&[("ACGT", "a"), ("TTTT", "b")]);
+        assert!(idx.sequence(SeqId::new(2)).is_none());
+        assert!(idx.sequence(SeqId::new(9999)).is_none());
+    }
+
+    #[test]
+    fn sequence_by_header_agrees_with_sequence_by_id() {
+        let idx = bidir_multi(&[("ACGTA", "chr1"), ("TTGCA", "chr2")]);
+        for header in ["chr1", "chr2"] {
+            let id = idx.seq_id(header).expect("header is indexed");
+            assert_eq!(idx.sequence_by_header(header), idx.sequence(id));
+        }
+        assert!(idx.sequence_by_header("absent").is_none());
+    }
+
+    #[test]
+    fn sequence_survives_serialization() {
+        let refs = [("ACGTACGTAC", "chr1"), ("TTGCA", "chr2")];
+        let original = bidir_multi(&refs);
+        let restored = BidirFmIndex::from_bytes(&original.to_bytes().unwrap()).unwrap();
+
+        for i in 0..original.num_sequences() {
+            let id = SeqId::new(i);
+            assert_eq!(
+                original.sequence(id),
+                restored.sequence(id),
+                "sequence {i} changed across serialization"
+            );
+        }
+    }
+
+    #[test]
+    fn reverse_half_carries_no_duplicate_text() {
+        // The reverse index's text is a redundant reversal of the forward one; dropping it
+        // is what keeps the serialized size at ~n rather than ~2n.
+        let idx = bidir_multi(&[("ACGTACGTAC", "chr1")]);
+        assert!(idx.rev.text.is_empty(), "reverse half retained its text");
+        assert!(
+            idx.sequence(SeqId::new(0)).is_some(),
+            "forward half lost its text"
+        );
     }
 
     #[test]

@@ -16,6 +16,7 @@ impl FmIndex {
             c_array: &self.c_array,
             occ: &self.occ,
             sa_samples: &self.sa_samples,
+            text: &self.text,
             text_len: self.text_len,
             num_sequences: self.num_sequences,
             seq_boundaries: &self.seq_boundaries,
@@ -49,6 +50,7 @@ impl FmIndex {
             c_array: deserialized.c_array,
             occ: deserialized.occ,
             sa_samples: deserialized.sa_samples,
+            text: deserialized.text,
             text_len: deserialized.text_len,
             num_sequences: deserialized.num_sequences,
             seq_boundaries: deserialized.seq_boundaries,
@@ -64,12 +66,15 @@ struct SerializableFmIndex<'a> {
     c_array: &'a CArray,
     occ: &'a OccTable,
     sa_samples: &'a SampledSuffixArray,
+    /// Concatenated text in alphabet codes; backs `FmIndex::sequence`.
+    text: &'a [u8],
     text_len: u32,
     num_sequences: u32,
     seq_boundaries: &'a [u32],
     seq_headers: &'a [String],
     lookup: Option<&'a LookupTable>,
     /// Tag identifying the alphabet used for matching (0 = IupacDna, 1 = ExactDna).
+    /// Kept last: `test_serialize_bad_tag_rejected` corrupts the final byte to reach it.
     alphabet_tag: u8,
 }
 
@@ -78,6 +83,7 @@ struct OwnedSerializableFmIndex {
     c_array: CArray,
     occ: OccTable,
     sa_samples: SampledSuffixArray,
+    text: Vec<u8>,
     text_len: u32,
     num_sequences: u32,
     seq_boundaries: Vec<u32>,

@@ -9,9 +9,10 @@ There you'll find every public type, trait, and function with its signatures and
 comments, including:
 
 - `FmIndex` — `build_cpu`, `build_cpu_with`, `build`, `count`, `locate`, `to_bytes`,
-  `from_bytes`, and the id/header accessors `seq_headers`, `seq_header`, `seq_id`.
+  `from_bytes`, the id/header accessors `seq_headers`, `seq_header`, `seq_id`, and the
+  base accessors `sequence`, `sequence_by_header`.
 - `BidirFmIndex` — `build_cpu`, `build_cpu_with`, `find_mems`, `find_smems`, the GPU
-  variants, and the same id/header accessors.
+  variants, and the same id/header and base accessors.
 - `SeqId` — a reference's stable 0-based id, reported by every query in place of its FASTA
   header. See [Sequence ids vs. headers](../guide/concepts.md#sequence-ids-vs-headers).
 - `Mem` / `MemHit` — result types for MEM/SMEM finding.
