@@ -10,6 +10,11 @@ A GPU-accelerated FM-index library for DNA sequence alignment. Runs on native ta
 
 Supports the full **16-symbol IUPAC ambiguity alphabet** (A C G T N R Y S W K M B D H V) in both the CPU and GPU query paths, with a pluggable `Alphabet` trait for swapping in custom matching semantics (e.g. exact-match ACGT-only for peer-comparable benchmarks).
 
+> ⚠️ **Known issues in the GPU query path.** Some GPU entry points do not currently match
+> their CPU counterparts — most notably `find_mems_gpu`, which returns a strict subset of
+> `find_mems`. Read [KNOWN-ISSUES.md](KNOWN-ISSUES.md) before relying on a GPU query path.
+> The CPU paths are unaffected.
+
 ---
 
 ## Features

@@ -14,6 +14,12 @@ haystackfm supports the full **16-symbol IUPAC ambiguity alphabet**
 (A C G T N R Y S W K M B D H V) in both its CPU and GPU query paths, with a pluggable
 `Alphabet` trait for swapping in custom matching semantics.
 
+> ⚠️ **Known issues in the GPU query path.** Some GPU entry points do not currently match
+> their CPU counterparts — most notably `find_mems_gpu`, which returns a strict subset of
+> [`find_mems`](./guide/mem-smem.md). See
+> [KNOWN-ISSUES.md](https://github.com/sriram98v/haystackfm/blob/main/KNOWN-ISSUES.md)
+> before relying on a GPU query path. The CPU paths are unaffected.
+
 > 🔎 **Try it in your browser:** the [live demo](./demo.md) builds an index and runs
 > `count` / `locate` queries entirely client-side via WebGPU — no server, no upload.
 
