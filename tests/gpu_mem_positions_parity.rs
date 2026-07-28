@@ -1,8 +1,16 @@
 //! Position-resolve parity tests: GPU find_smems_gpu / find_mems_gpu must return
-//! the same (ref_id, offset) position sets as the CPU oracle (find_smems + locate).
+//! the same (ref_id, offset) position sets as the CPU oracle.
+//!
+//! The SMEM oracle is `find_smems + locate`. The MEM oracle is `legacy_mem_oracle`, **not**
+//! `find_mems`: the shader's MODE_MEM path still runs the old whole-set algorithm (issue 1 in
+//! `KNOWN-ISSUES.md`). Point the MEM tests back at `find_mems` as part of the port.
+
+#[cfg(feature = "gpu")]
+mod legacy_mem_oracle;
 
 #[cfg(feature = "gpu")]
 mod tests {
+    use crate::legacy_mem_oracle::legacy_mems;
     use haystackfm::alphabet::DnaSequence;
     use haystackfm::{BidirFmIndex, FmIndexConfig, MemHit, SeqId};
     use pollster::FutureExt as _;
@@ -28,8 +36,8 @@ mod tests {
         DnaSequence::from_str(s).unwrap()
     }
 
-    /// CPU oracle: find MEMs then locate each one. Returns sorted vec of
-    /// (query_start, query_end, sorted_positions).
+    /// MEM oracle: the legacy whole-set algorithm the shader still runs, with positions
+    /// resolved. Returns a vec of `(query_start, query_end, positions)`.
     ///
     /// CPU and GPU positions are both `(SeqId, u32)`, so they compare directly.
     fn cpu_mems_with_positions(
@@ -37,7 +45,7 @@ mod tests {
         query: &[u8],
         min_len: usize,
     ) -> Vec<(usize, usize, HashSet<(SeqId, u32)>)> {
-        idx.find_mems(query, min_len, true)
+        legacy_mems(idx, query, min_len, true)
             .into_iter()
             .map(|m| {
                 let positions: HashSet<(SeqId, u32)> = m.positions.iter().copied().collect();

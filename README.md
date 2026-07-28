@@ -167,8 +167,9 @@ BidirFmIndex::build_cpu(sequences, config)?               // IupacDna alphabet (
 BidirFmIndex::build_cpu_with::<ExactDna>(sequences, config)?  // custom alphabet
 
 // CPU MEM finding — IUPAC-aware; N matches any of A/C/G/T
-bidir.find_smems(query, min_len, locate)        // Vec<Mem>
-bidir.find_mems(query, min_len, locate)         // Vec<Mem>
+bidir.find_smems(query, min_len, locate)        // Vec<Mem> — containment-maximal MEMs
+bidir.find_mems(query, min_len, locate)         // Vec<Mem> — all MEMs (MUMmer/BWA sense:
+                                                //   maximality judged per occurrence)
 
 // Resolve reported ids to headers (both O(1))
 bidir.seq_headers() / seq_header(id) / seq_id(header)

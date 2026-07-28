@@ -29,6 +29,39 @@ Both are IUPAC-aware (`N` matches any of A/C/G/T). Passing `locate = false` skip
 resolution and leaves `Mem::positions` empty — cheaper when you only need match extents and
 counts.
 
+### What counts as maximal
+
+Maximality is judged **per occurrence**, as in MUMmer and BWA. `find_mems` reports a query
+interval `[s,e)` when *at least one* of its occurrences is maximal in both directions at that
+occurrence — preceded by a symbol incompatible with `query[s-1]` (or at a reference start, or
+`s == 0`) and followed by a symbol incompatible with `query[e]` (or at a reference end, or
+`e == query.len()`).
+
+The distinction matters as soon as there is more than one reference:
+
+```text
+query  ACGTACGTAC
+ref_a  ACGTACGTAC     holds the whole query
+ref_b  ACGTACT        holds query[0..6), then T != query[6] = G
+
+find_mems(min_len = 2)  ->  (0,2)  (0,6)  (0,10)  (4,10)  (8,10)
+find_smems(min_len = 2) ->                (0,10)
+```
+
+`(0,6)` is a MEM on the strength of ref_b's occurrence alone, even though ref_a's occurrence
+at the same query start extends further. Requiring *every* occurrence to be maximal would
+drop it — and would collapse `find_mems` onto `find_smems`.
+
+Two consequences worth planning for:
+
+- `match_count` and `positions` cover only the **maximal** occurrences of a match, not every
+  occurrence of the matched substring.
+- The result can hold up to O(|query|²) intervals. `min_len` is the only bound on output
+  size, so set it deliberately.
+
+The SMEMs are exactly the containment-maximal MEMs, so `find_smems` output is always a subset
+of `find_mems` output.
+
 ### `Mem`
 
 ```rust
@@ -47,6 +80,12 @@ hot path the id representation exists for: a conserved seed can occur in hundred
 references, and positions are resolved per occurrence.
 
 ## GPU MEM / SMEM
+
+> **`find_mems_gpu` is not currently equivalent to `find_mems`.** The shader still applies
+> whole-set maximality and reports only the longest match per query start, so it returns a
+> strict subset of the CPU result. Use the CPU path when you need occurrence-level MEMs.
+> Tracked as issue 1 in [`KNOWN-ISSUES.md`](https://github.com/sriram98v/haystackfm/blob/main/KNOWN-ISSUES.md).
+> `find_smems_gpu` is unaffected by this.
 
 For batches of queries, run the GPU pipeline. Queries are passed as `&[DnaSequence]`, and
 reference boundaries come from the index:

@@ -1,3 +1,4 @@
+use crate::alphabet::ALPHABET_SIZE;
 use crate::fm_index::bidir::BidirInterval;
 use crate::fm_index::bidir_index::BidirFmIndex;
 use crate::fm_index::seq_id::SeqId;
@@ -5,16 +6,20 @@ use crate::fm_index::FmIndex;
 
 /// A Maximal Exact Match (MEM) between a query and the indexed reference.
 ///
-/// A MEM is a substring of the query that:
-/// 1. Occurs at least once in the reference.
-/// 2. Is **left-maximal**: extending one base to the left removes all occurrences.
-/// 3. Is **right-maximal**: extending one base to the right removes all occurrences.
+/// Maximality is judged **per occurrence**, as in MUMmer and BWA. A query interval `[s,e)`
+/// is a MEM when at least one of its occurrences satisfies both:
+/// - **left-maximal at that occurrence**: `s == 0`, the occurrence sits at a reference start,
+///   or the preceding reference symbol is incompatible with `query[s-1]`;
+/// - **right-maximal at that occurrence**: `e == query.len()`, the occurrence sits at a
+///   reference end, or the following reference symbol is incompatible with `query[e]`.
 ///
-/// A Super-Maximal Exact Match (SMEM) additionally satisfies:
-/// 4. No other MEM with the same right boundary has a larger count.
+/// A Super-Maximal Exact Match (SMEM) is a MEM whose query interval is not contained in that
+/// of any other MEM. So [`BidirFmIndex::find_smems`] returns a subset of
+/// [`BidirFmIndex::find_mems`].
 ///
-/// In practice `find_smems` finds all MEMs that are simultaneously left- and
-/// right-maximal (i.e., SMEMs in the BWA-MEM sense).
+/// Note the two constructors differ in what they count: `find_mems` reports only the maximal
+/// occurrences of a match in `match_count` and `positions`, whereas for a `find_smems` result
+/// every occurrence is maximal anyway, so the two coincide there.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mem {
     /// Start position in the query (0-based, inclusive).
@@ -59,7 +64,7 @@ impl BidirFmIndex {
     ///    skip it.
     /// 3. Accept seeds that are ≥ `min_len` and both left- and right-maximal.
     ///
-    /// Complexity: O(|query|² × α) where α = ALPHABET_SIZE = 6.
+    /// Complexity: O(|query|² × α) where α = [`ALPHABET_SIZE`].
     /// In practice much better: once a long SMEM is found the inner loop
     /// advances to the SMEM's right boundary.
     ///
@@ -116,13 +121,29 @@ impl BidirFmIndex {
         smems
     }
 
-    /// Find all MEMs (not just super-maximal) of length ≥ `min_len`.
+    /// Find all MEMs of length ≥ `min_len`, in the MUMmer / BWA sense.
     ///
-    /// Unlike `find_smems`, this does NOT advance past the right boundary after
-    /// finding a MEM, so overlapping MEMs from different starting positions are
-    /// all reported.
+    /// A query interval `[s,e)` is reported when **at least one** of its occurrences is
+    /// maximal in both directions *at that occurrence* — that is, some occurrence is
+    /// preceded by a symbol incompatible with `query[s-1]` (or sits at a reference start,
+    /// or `s == 0`) and followed by a symbol incompatible with `query[e]` (or sits at a
+    /// reference end, or `e == query.len()`).
     ///
-    /// Complexity: O(|query|² × α).
+    /// This is deliberately weaker than requiring *every* occurrence to be maximal. Under
+    /// the stronger reading a single extendable occurrence in any one reference deletes the
+    /// interval, which collapses the result set onto [`find_smems`](Self::find_smems) and
+    /// makes per-reference match recovery systematically sparse in a database of
+    /// near-identical references.
+    ///
+    /// The SMEMs are exactly the containment-maximal MEMs, so this result is a strict
+    /// superset of [`find_smems`](Self::find_smems).
+    ///
+    /// `match_count` and `positions` cover **only the maximal occurrences**, not every
+    /// occurrence of the matched substring.
+    ///
+    /// Complexity: O(|query|² × α) for the extension sweep, plus O(α × |ivs|) at each
+    /// occurrence-count drop; O(|query|² × α²) worst case. The result can hold up to
+    /// O(|query|²) intervals — `min_len` is the only bound on output size.
     pub fn find_mems(&self, query: &[u8], min_len: usize, locate: bool) -> Vec<Mem> {
         self.mem_raws(query, min_len)
             .into_iter()
@@ -136,26 +157,119 @@ impl BidirFmIndex {
             return vec![];
         }
 
-        let mut raws = self.collect_raw_mems(query, min_len);
+        let mut raws = self.collect_mem_candidates(query, min_len);
         raws.sort_by_key(|m| (m.query_start, m.query_end));
         raws.dedup_by_key(|m| (m.query_start, m.query_end));
         raws
     }
 
-    /// Find the right-maximal, left-maximal seed starting at query position `i`.
+    /// Collect every occurrence-level MEM candidate, without resolving positions.
     ///
-    /// `N` bases in `query` are treated as wildcards matching any of A/C/G/T.
+    /// For each start `i`, forward-extends the full occurrence set of `query[i..j)`. At every
+    /// step where the occurrence count drops, the occurrences that failed to extend are
+    /// exactly the ones right-maximal at `j`; [`drop_set`](Self::drop_set) recovers them as
+    /// SA intervals. `j == query.len()` is right-maximal for the whole surviving set.
+    /// [`push_mem_candidate`](Self::push_mem_candidate) then applies the per-occurrence
+    /// left-maximality filter.
     ///
-    /// Returns `(Some(Mem), next_i)` on success where `next_i = i + 1` (the
-    /// `find_smems` outer loop may choose a larger advance).
-    /// Returns `(None, i + 1)` when no valid seed exists at `i`.
-    /// Collect the raw MEM anchored at every start position (one per left-maximal start),
-    /// without resolving positions. Shared by [`find_mems`](Self::find_mems) and
-    /// [`find_smems`](Self::find_smems).
-    fn collect_raw_mems(&self, query: &[u8], min_len: usize) -> Vec<RawMem> {
-        (0..query.len())
-            .filter_map(|i| self.raw_mem_from(query, i, min_len))
-            .collect()
+    /// Completeness: `curr` at step `j` is precisely the occurrence set of `query[i..j)`, so
+    /// every MEM `(i,j)` has its witnessing occurrence in the drop set at `j`. Soundness:
+    /// anything emitted has an occurrence maximal in both directions.
+    ///
+    /// Used only by [`find_mems`](Self::find_mems); [`find_smems`](Self::find_smems) has its
+    /// own generator in [`collect_smem_candidates`](Self::collect_smem_candidates).
+    fn collect_mem_candidates(&self, query: &[u8], min_len: usize) -> Vec<RawMem> {
+        let n = query.len();
+        let mut out: Vec<RawMem> = Vec::new();
+
+        for i in 0..n {
+            // All occurrences of a symbol compatible with `query[i]`.
+            let mut curr = extend_multi_right(&[self.full_interval()], query[i], &self.rev);
+            if curr.is_empty() {
+                continue;
+            }
+            let mut j = i + 1;
+            loop {
+                if j == n {
+                    // Query exhausted: every surviving occurrence is right-maximal.
+                    self.push_mem_candidate(&mut out, query, i, n, curr, min_len);
+                    break;
+                }
+                let next = extend_multi_right(&curr, query[j], &self.rev);
+                if coverage(&next) != coverage(&curr) {
+                    let dropped = self.drop_set(&curr, query[j]);
+                    self.push_mem_candidate(&mut out, query, i, j, dropped, min_len);
+                }
+                if next.is_empty() {
+                    break;
+                }
+                curr = next;
+                j += 1;
+            }
+        }
+
+        out
+    }
+
+    /// The occurrences in `ivs` that canNOT be extended right by `c`.
+    ///
+    /// Extends by every symbol *incompatible* with `c`. The results are disjoint (distinct
+    /// following symbols), and the sentinel is incompatible with every base, so occurrences
+    /// sitting at the end of a reference are captured here rather than silently lost.
+    fn drop_set(&self, ivs: &[BidirInterval], c: u8) -> Vec<BidirInterval> {
+        let compat = (self.rev.alphabet_fns.compatible_fn)(c);
+        let mut out = Vec::new();
+        for sym in 0..ALPHABET_SIZE as u8 {
+            if compat.contains(&sym) {
+                continue;
+            }
+            for iv in ivs {
+                if let Some(ext) = iv.extend_right(sym, &self.rev) {
+                    out.push(ext);
+                }
+            }
+        }
+        out
+    }
+
+    /// Apply `min_len` and the per-occurrence left-maximality filter, then record the MEM.
+    ///
+    /// `ivs` holds occurrences already known to be right-maximal at `end`. `extend_multi_left`
+    /// walks the *compatible* bases of `query[start-1]`, and its results are disjoint, so
+    /// subtracting its coverage counts exactly the occurrences that are left-extendable —
+    /// no interval subtraction and no sentinel special case (a reference start is preceded by
+    /// a sentinel, which is never compatible with a base).
+    fn push_mem_candidate(
+        &self,
+        out: &mut Vec<RawMem>,
+        query: &[u8],
+        start: usize,
+        end: usize,
+        ivs: Vec<BidirInterval>,
+        min_len: usize,
+    ) {
+        if end - start < min_len || ivs.is_empty() {
+            return;
+        }
+        let left_ctx = if start == 0 {
+            None
+        } else {
+            Some(query[start - 1])
+        };
+        let match_count = match left_ctx {
+            None => coverage(&ivs),
+            Some(c) => coverage(&ivs) - coverage(&extend_multi_left(&ivs, c, &self.fwd)),
+        };
+        if match_count == 0 {
+            return;
+        }
+        out.push(RawMem {
+            query_start: start,
+            query_end: end,
+            match_count,
+            ivs,
+            left_ctx,
+        });
     }
 
     /// Single-pass BWA-MEM collection of MEM candidates that contain every SMEM.
@@ -231,6 +345,9 @@ impl BidirFmIndex {
                     query_end: end,
                     match_count,
                     ivs: bivs,
+                    // `extend_left_maximally` stopped because no occurrence extends left,
+                    // so every occurrence here is already left-maximal.
+                    left_ctx: None,
                 });
             }
 
@@ -261,65 +378,17 @@ impl BidirFmIndex {
         (ivs, start)
     }
 
-    /// Right-maximal, left-maximal seed starting at query position `i`, *without* resolving
-    /// positions. `N` bases in `query` are treated as wildcards matching any of A/C/G/T.
-    ///
-    /// Returns `None` when no valid seed of length ≥ `min_len` exists at `i`. The returned
-    /// `query_start` is always `i`, so distinct `i` yield distinct MEMs.
-    fn raw_mem_from(&self, query: &[u8], i: usize, min_len: usize) -> Option<RawMem> {
-        let n = query.len();
-        // Track a set of active intervals; N-wildcard may produce multiple branches.
-        // `ivs` always holds the last non-empty extension, so no per-step snapshot/clone is
-        // needed — on break it is exactly the accepted right-maximal interval set.
-        let mut ivs: Vec<BidirInterval> = vec![self.full_interval()];
-        let mut j = i;
-        let mut matched = false;
-
-        // Right extension phase: uses the reverse index.
-        while j < n {
-            let next = extend_multi_right(&ivs, query[j], &self.rev);
-            if next.is_empty() {
-                break;
-            }
-            ivs = next;
-            j += 1;
-            matched = true;
-        }
-
-        if !matched {
-            return None;
-        }
-        let (valid_ivs, end) = (ivs, j);
-
-        if end - i < min_len {
-            return None;
-        }
-
-        // Left-maximality check: uses the forward index. Not left-maximal when ANY interval
-        // in the set can be extended left.
-        let left_maximal =
-            i == 0 || extend_multi_left(&valid_ivs, query[i - 1], &self.fwd).is_empty();
-        if !left_maximal {
-            return None;
-        }
-
-        let match_count: u32 = valid_ivs.iter().map(|iv| iv.size()).sum();
-
-        Some(RawMem {
-            query_start: i,
-            query_end: end,
-            match_count,
-            ivs: valid_ivs,
-        })
-    }
-
     /// Resolve a [`RawMem`] into a public [`Mem`], locating reference positions only when
     /// `locate` is set.
+    ///
+    /// When `left_ctx` is set, occurrences that are left-extendable are dropped here so that
+    /// `positions` holds exactly the maximal occurrences already counted by `match_count`.
     fn locate_raw(&self, raw: RawMem, locate: bool) -> Mem {
         let positions = if locate {
             raw.ivs
                 .iter()
                 .flat_map(|iv| self.locate_interval(iv))
+                .filter(|&(id, off)| self.is_left_maximal_at(id, off, raw.left_ctx))
                 .collect()
         } else {
             Vec::new()
@@ -331,15 +400,41 @@ impl BidirFmIndex {
             positions,
         }
     }
+
+    /// Whether the occurrence starting at `off` in reference `id` is left-maximal.
+    ///
+    /// `left_ctx` is `None` for matches anchored at the query start and for candidates whose
+    /// intervals were already extended left as far as they go, both of which are maximal by
+    /// construction. Reads the retained forward text, which a `BidirFmIndex` always keeps
+    /// (only the reverse half calls `forget_text`); if it is unavailable the occurrence is
+    /// kept rather than guessed away.
+    fn is_left_maximal_at(&self, id: SeqId, off: u32, left_ctx: Option<u8>) -> bool {
+        let Some(c) = left_ctx else { return true };
+        if off == 0 {
+            return true;
+        }
+        match self.sequence(id) {
+            Some(seq) => !(self.fwd.alphabet_fns.compatible_fn)(c).contains(&seq[off as usize - 1]),
+            None => true,
+        }
+    }
 }
 
 /// A MEM before its reference positions are resolved: query interval, occurrence count, and
 /// the accepted bidirectional SA intervals (kept so only survivors need locating).
+///
+/// For a candidate from [`collect_mem_candidates`](BidirFmIndex::collect_mem_candidates) the
+/// intervals describe matches one symbol longer than `[query_start, query_end)` — they carry
+/// the trailing symbol that failed to extend — except when `query_end` is the query length.
+/// Occurrence *start* positions are unaffected, so locating needs no offset adjustment.
 struct RawMem {
     query_start: usize,
     query_end: usize,
     match_count: u32,
     ivs: Vec<BidirInterval>,
+    /// `query[query_start - 1]`, against which occurrences are tested for left-maximality.
+    /// `None` when every occurrence in `ivs` is left-maximal by construction.
+    left_ctx: Option<u8>,
 }
 
 /// Total number of text occurrences represented by an interval set.
@@ -419,6 +514,43 @@ mod tests {
         let mut v: Vec<_> = mems.into_iter().collect();
         v.sort();
         v
+    }
+
+    /// True when reference symbol `t` is matched by query symbol `q` under IUPAC overlap.
+    fn compat(q: u8, t: u8) -> bool {
+        crate::alphabet::compatible_symbols(q).contains(&t)
+    }
+
+    /// Occurrence-level brute-force MEM enumerator — the MUMmer/BWA definition.
+    ///
+    /// `[s,e)` is a MEM when **some** occurrence of `query[s..e)` in some reference is
+    /// maximal in both directions *at that occurrence*. Independent of the index: it walks
+    /// every (query position, reference position) pair. `refs` holds the encoded bases of
+    /// each reference separately, so a reference boundary counts as maximal.
+    fn brute_force_mems_occ(refs: &[Vec<u8>], query: &[u8], min_len: usize) -> Vec<(usize, usize)> {
+        let mut out = std::collections::BTreeSet::new();
+        for t in refs {
+            for i in 0..query.len() {
+                for j in 0..t.len() {
+                    if !compat(query[i], t[j]) {
+                        continue;
+                    }
+                    if i > 0 && j > 0 && compat(query[i - 1], t[j - 1]) {
+                        continue; // this occurrence is not left-maximal
+                    }
+                    // For a fixed occurrence the only right-maximal length is the full
+                    // extension: every shorter prefix still extends by one more base.
+                    let mut l = 0;
+                    while i + l < query.len() && j + l < t.len() && compat(query[i + l], t[j + l]) {
+                        l += 1;
+                    }
+                    if l >= min_len {
+                        out.insert((i, i + l));
+                    }
+                }
+            }
+        }
+        out.into_iter().collect()
     }
 
     #[test]
@@ -566,7 +698,7 @@ mod tests {
         let mem_pairs: Vec<(usize, usize)> =
             mems.iter().map(|m| (m.query_start, m.query_end)).collect();
 
-        let expected = brute_force_mems(reference, query_str, 1);
+        let expected = brute_force_mems_occ(&[encode(reference)], &query, 1);
 
         assert_eq!(
             mem_pairs, expected,
@@ -581,31 +713,167 @@ mod tests {
         let query_str = "CGTTAGCAGT";
         let idx = bidir(reference);
         let query = encode(query_str);
+        let text = encode(reference);
 
         let mems = idx.find_mems(&query, 1, false);
         assert!(!mems.is_empty(), "expected at least one MEM");
 
         for mem in &mems {
-            let s = mem.query_start;
-            let e = mem.query_end;
-            let matched = &query_str[s..e];
-
+            let (s, e) = (mem.query_start, mem.query_end);
+            // Occurrence-level: at least one occurrence must be maximal in both directions.
+            let witnessed = (0..text.len()).any(|j| {
+                if j + (e - s) > text.len() {
+                    return false;
+                }
+                let matches = (0..e - s).all(|k| compat(query[s + k], text[j + k]));
+                let left_max = s == 0 || j == 0 || !compat(query[s - 1], text[j - 1]);
+                let right_max = e == query.len()
+                    || j + (e - s) == text.len()
+                    || !compat(query[e], text[j + (e - s)]);
+                matches && left_max && right_max
+            });
             assert!(
-                reference.contains(matched),
-                "MEM [{s},{e}) '{matched}' not found in reference"
+                witnessed,
+                "MEM [{s},{e}) has no occurrence that is maximal in both directions"
             );
+        }
+    }
 
-            let right_maximal = e == query_str.len() || !reference.contains(&query_str[s..e + 1]);
-            assert!(
-                right_maximal,
-                "MEM [{s},{e}) '{matched}' is not right-maximal: extending right still matches"
-            );
+    /// Two references sharing a query prefix, one extending further than the other. Under
+    /// whole-set maximality only `(0,10)` survives, because ref_a's occurrences veto every
+    /// shorter interval; per occurrence, four more MEMs are real.
+    #[test]
+    fn find_mems_reports_all_occurrence_level_mems() {
+        let ref_a = "ACGTACGTAC"; // holds the whole query
+        let ref_b = "ACGTACT"; // holds query[0..6), flanked by T != query[6] = G
+        let idx = bidir_multi(&[(ref_a, "A"), (ref_b, "B")]);
+        let query = encode("ACGTACGTAC");
 
-            let left_maximal = s == 0 || !reference.contains(&query_str[s - 1..e]);
+        let got: Vec<(usize, usize)> = idx
+            .find_mems(&query, 2, false)
+            .iter()
+            .map(|m| (m.query_start, m.query_end))
+            .collect();
+
+        assert_eq!(got, vec![(0, 2), (0, 6), (0, 10), (4, 10), (8, 10)]);
+        assert_eq!(
+            got,
+            brute_force_mems_occ(&[encode(ref_a), encode(ref_b)], &query, 2),
+            "must agree with the independent brute-force enumerator"
+        );
+    }
+
+    /// Left-maximality is per-occurrence too: `(4,10)` and `(8,10)` are real MEMs via the
+    /// sequence-start occurrences, even though ref_a@4 / ref_a@8 are left-extendable.
+    #[test]
+    fn find_mems_left_maximality_is_per_occurrence() {
+        let idx = bidir_multi(&[("ACGTACGTAC", "A"), ("ACGTACT", "B")]);
+        let query = encode("ACGTACGTAC");
+
+        let got: Vec<(usize, usize)> = idx
+            .find_mems(&query, 2, false)
+            .iter()
+            .map(|m| (m.query_start, m.query_end))
+            .collect();
+
+        for want in [(4, 10), (8, 10)] {
             assert!(
-                left_maximal,
-                "MEM [{s},{e}) '{matched}' is not left-maximal: extending left still matches"
+                got.contains(&want),
+                "{want:?} dropped: whole-set left-maximality over-rejects"
             );
+        }
+    }
+
+    /// `find_mems` against the independent occurrence-level enumerator on randomized
+    /// multi-reference corpora.
+    ///
+    /// The cross-check has to be against a brute-force enumerator, not against `find_smems`:
+    /// under whole-set maximality the two functions return near-identical sets, so comparing
+    /// them to each other cannot detect this class of defect.
+    #[test]
+    fn find_mems_matches_brute_force_randomized() {
+        let mut state: u64 = 0x5EED_1234_ABCD_9876;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 33) as u32
+        };
+        let pick = |set: &[u8], next: &mut dyn FnMut() -> u32| -> String {
+            (set[(next() % set.len() as u32) as usize] as char).to_string()
+        };
+        let rand_seq = |n: usize, set: &[u8], next: &mut dyn FnMut() -> u32| -> String {
+            (0..n).map(|_| pick(set, next)).collect()
+        };
+        let acgt = b"ACGT";
+        let iupac = b"ACGTNRY";
+
+        for iter in 0..60 {
+            let full = rand_seq(60, acgt, &mut next);
+            // Reference set: a full copy, an interior slice, and noise — plus, every other
+            // iteration, IUPAC codes so extensions branch into interval sets.
+            let a = full.clone();
+            let b = full[10..40].to_string();
+            let noise = if iter % 2 == 0 {
+                rand_seq(40, iupac, &mut next)
+            } else {
+                rand_seq(40, acgt, &mut next)
+            };
+            let idx = bidir_multi(&[(&a, "A"), (&b, "B"), (&noise, "NOISE")]);
+
+            let q = encode(&full);
+            let refs = vec![encode(&a), encode(&b), encode(&noise)];
+            for min_len in [1usize, 3, 8] {
+                let got: Vec<(usize, usize)> = idx
+                    .find_mems(&q, min_len, false)
+                    .iter()
+                    .map(|m| (m.query_start, m.query_end))
+                    .collect();
+                let expected = brute_force_mems_occ(&refs, &q, min_len);
+                assert_eq!(
+                    got, expected,
+                    "iter={iter} min_len={min_len}\nquery={full}\nnoise={noise}"
+                );
+            }
+        }
+    }
+
+    /// Every reported position must be an occurrence that is genuinely maximal both ways,
+    /// and `match_count` must agree with the number of reported positions.
+    #[test]
+    fn find_mems_positions_are_maximal_occurrences() {
+        let refs = [("ACGTACGTAC", "A"), ("ACGTACT", "B"), ("TTACGTACGG", "C")];
+        let idx = bidir_multi(&refs);
+        let query = encode("ACGTACGTAC");
+
+        let mems = idx.find_mems(&query, 2, true);
+        assert!(!mems.is_empty());
+
+        for mem in &mems {
+            let (s, e) = (mem.query_start, mem.query_end);
+            assert_eq!(
+                mem.positions.len() as u32,
+                mem.match_count,
+                "MEM [{s},{e}) match_count disagrees with positions"
+            );
+            for &(id, off) in &mem.positions {
+                let seq = encode(refs[id.index()].0);
+                let off = off as usize;
+                assert!(
+                    (0..e - s).all(|k| compat(query[s + k], seq[off + k])),
+                    "MEM [{s},{e}) position {id:?}@{off} does not spell the match"
+                );
+                assert!(
+                    s == 0 || off == 0 || !compat(query[s - 1], seq[off - 1]),
+                    "MEM [{s},{e}) position {id:?}@{off} is left-extendable"
+                );
+                assert!(
+                    e == query.len()
+                        || off + (e - s) == seq.len()
+                        || !compat(query[e], seq[off + (e - s)]),
+                    "MEM [{s},{e}) position {id:?}@{off} is right-extendable"
+                );
+            }
         }
     }
 

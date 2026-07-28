@@ -296,8 +296,17 @@ impl BidirFmIndex {
         .await
     }
 
-    /// Find all Maximal Exact Matches (MEMs) for a batch of queries on the GPU,
+    /// Find Maximal Exact Matches (MEMs) for a batch of queries on the GPU,
     /// resolving each match to `(ref_id, offset_within_ref)` positions.
+    ///
+    /// # Not equivalent to [`find_mems`](Self::find_mems)
+    ///
+    /// The shader has not been ported to occurrence-level MEMs. It applies whole-set
+    /// maximality and reports only the longest match per query start position, so its result
+    /// is a **strict subset** of [`find_mems`](Self::find_mems). Use the CPU path when you
+    /// need every MEM. Tracked as issue 1 in `KNOWN-ISSUES.md`.
+    ///
+    /// [`find_smems_gpu`](Self::find_smems_gpu) is unaffected by this.
     ///
     /// `ref_boundaries[i]` is the exclusive end position of reference `i` in the
     /// concatenated text.
