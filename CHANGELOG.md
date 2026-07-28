@@ -8,7 +8,12 @@ Before 1.0, a breaking change bumps the **minor** version.
 
 ## [Unreleased]
 
-Breaking behavior change — cut this as **0.4.0**.
+## [0.4.0] - 2026-07-28
+
+Breaking behavior change. The public API is unchanged — `cargo semver-checks` reports no
+semver update required — but `find_mems` returns materially different results, so this takes
+a minor bump under the pre-1.0 policy above rather than the patch bump an API-only check
+would allow.
 
 ### Fixed
 - **Breaking.** `BidirFmIndex::find_mems` now enumerates MEMs in the MUMmer / BWA sense:
@@ -120,4 +125,5 @@ name, and its earlier history is not carried over here.
 - Licensed under Apache-2.0.
 
 [Unreleased]: https://github.com/sriram98v/haystackfm/commits/main
+[0.4.0]: https://crates.io/crates/haystackfm/0.4.0
 [0.1.0]: https://crates.io/crates/haystackfm/0.1.0
