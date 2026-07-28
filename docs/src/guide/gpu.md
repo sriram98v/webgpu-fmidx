@@ -4,6 +4,12 @@ With the `gpu` feature, construction and the query hot loops offload to the GPU 
 [`wgpu`](https://github.com/gfx-rs/wgpu). On native targets that means Vulkan, Metal, or
 DX12; in the browser it means WebGPU (see [WebAssembly](./wasm.md)).
 
+> ⚠️ **Known issues.** Not every GPU query path currently matches its CPU counterpart —
+> `find_mems_gpu` in particular returns a strict subset of `find_mems`. Check
+> [KNOWN-ISSUES.md](https://github.com/sriram98v/haystackfm/blob/main/KNOWN-ISSUES.md)
+> before depending on a GPU query path. The issues recorded there concern MEM/SMEM
+> *queries*; GPU construction is not among them.
+
 ## Building on the GPU
 
 ```rust

@@ -10,6 +10,11 @@ A GPU-accelerated FM-index library for DNA sequence alignment. Runs on native ta
 
 Supports the full **16-symbol IUPAC ambiguity alphabet** (A C G T N R Y S W K M B D H V) in both the CPU and GPU query paths, with a pluggable `Alphabet` trait for swapping in custom matching semantics (e.g. exact-match ACGT-only for peer-comparable benchmarks).
 
+> ⚠️ **Known issues in the GPU query path.** Some GPU entry points do not currently match
+> their CPU counterparts — most notably `find_mems_gpu`, which returns a strict subset of
+> `find_mems`. Read [KNOWN-ISSUES.md](KNOWN-ISSUES.md) before relying on a GPU query path.
+> The CPU paths are unaffected.
+
 ---
 
 ## Features
@@ -167,8 +172,9 @@ BidirFmIndex::build_cpu(sequences, config)?               // IupacDna alphabet (
 BidirFmIndex::build_cpu_with::<ExactDna>(sequences, config)?  // custom alphabet
 
 // CPU MEM finding — IUPAC-aware; N matches any of A/C/G/T
-bidir.find_smems(query, min_len, locate)        // Vec<Mem>
-bidir.find_mems(query, min_len, locate)         // Vec<Mem>
+bidir.find_smems(query, min_len, locate)        // Vec<Mem> — containment-maximal MEMs
+bidir.find_mems(query, min_len, locate)         // Vec<Mem> — all MEMs (MUMmer/BWA sense:
+                                                //   maximality judged per occurrence)
 
 // Resolve reported ids to headers (both O(1))
 bidir.seq_headers() / seq_header(id) / seq_id(header)

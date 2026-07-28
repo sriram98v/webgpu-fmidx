@@ -8,6 +8,44 @@ Before 1.0, a breaking change bumps the **minor** version.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-28
+
+Breaking behavior change. The public API is unchanged — `cargo semver-checks` reports no
+semver update required — but `find_mems` returns materially different results, so this takes
+a minor bump under the pre-1.0 policy above rather than the patch bump an API-only check
+would allow.
+
+### Fixed
+- **Breaking.** `BidirFmIndex::find_mems` now enumerates MEMs in the MUMmer / BWA sense:
+  a query interval is reported when **at least one** of its occurrences is maximal in both
+  directions *at that occurrence*. It previously required **every** occurrence to be
+  maximal, so a single extendable occurrence in any one reference deleted the interval.
+  Both the right-maximality test (the forward loop stopped only when the occurrence set went
+  empty, discarding occurrences that dropped out mid-extension) and the left-maximality test
+  (rejecting the interval if *any* occurrence was left-extendable) were affected.
+
+  Consequences of the old behavior: at most one interval per query start position, and a
+  result set that collapsed onto `find_smems`, making MEM-vs-SMEM comparisons through this
+  API a guaranteed null result. In a database of near-identical references, per-reference
+  match recovery was systematically sparse.
+
+  For `query = ACGTACGTAC` against `ACGTACGTAC` and `ACGTACT` with `min_len = 2`, the result
+  goes from `{(0,10)}` to `{(0,2), (0,6), (0,10), (4,10), (8,10)}`.
+
+  `find_smems` is unaffected and unchanged: the containment-maximal MEMs under the new
+  definition are exactly the SMEMs it already returned.
+
+### Changed
+- **Breaking.** `Mem::match_count` and `Mem::positions` from `find_mems` now cover only the
+  maximal occurrences of a match, not every occurrence of the matched substring.
+- `find_mems` output size is now bounded by O(|query|²) rather than |query|; `min_len` is the
+  only guard. Expect `benches/mem_bench.rs` and `benches/mem_positions_bench.rs` timings to
+  move accordingly.
+
+### Known issues
+- `find_mems_gpu` still runs the previous whole-set algorithm and is **not** equivalent to
+  `find_mems`. The `shaders/mem_find.wgsl` MODE_MEM port is tracked in `KNOWN-ISSUES.md`.
+
 ## [0.3.0] - 2026-07-24
 
 Breaking release: the index now retains the indexed text and can serve the bases of any
@@ -87,4 +125,5 @@ name, and its earlier history is not carried over here.
 - Licensed under Apache-2.0.
 
 [Unreleased]: https://github.com/sriram98v/haystackfm/commits/main
+[0.4.0]: https://crates.io/crates/haystackfm/0.4.0
 [0.1.0]: https://crates.io/crates/haystackfm/0.1.0
