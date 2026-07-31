@@ -15,6 +15,26 @@ cargo build            # CPU only (default features)
 
 The Minimum Supported Rust Version (MSRV) is **1.87**. CI and releases target 1.87+.
 
+### With Nix (optional)
+
+A flake provides a pinned toolchain plus the WASM, docs, and Vulkan tooling, so you don't
+have to install `wasm-bindgen-cli`, `mdbook`, or Node by hand:
+
+```bash
+nix develop            # dev shell: cargo, clippy, rustfmt, rust-analyzer,
+                       # wasm32 target, wasm-bindgen, wasm-pack, mdbook, node
+nix build              # build the crate (default `cpu` features) and run its tests
+nix flake check        # same, as a check
+```
+
+If `nix` reports that `nix-command` or `flakes` is disabled, either add
+`experimental-features = nix-command flakes` to `~/.config/nix/nix.conf`, or prefix commands
+with `nix --extra-experimental-features 'nix-command flakes' …`.
+
+The flake builds the crate with default (`cpu`) features only. GPU and WASM builds stay
+manual — GPU tests need a real device, and `wasm-bindgen` must version-match the crate. The
+dev shell warns on entry if the two disagree.
+
 ## Feature flags
 
 The crate is split into additive feature flags — build and test the ones your change touches:

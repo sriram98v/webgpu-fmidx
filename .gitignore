@@ -1,6 +1,5 @@
 .claude/
 /target
-Cargo.lock
 *.swp
 *.swo
 *~
@@ -12,6 +11,11 @@ Cargo.lock
 /docs/book
 /site
 graphify-out/
+
+# Nix build outputs (flake.nix / flake.lock are tracked)
+/result
+/result-*
+.direnv/
 
 # Local dev planning notes (kept out of the repo)
 /plan.md
