@@ -53,3 +53,75 @@ jobs:
       # GPU tests are gated behind #[cfg(feature = "gpu")] and are excluded
       # automatically. Criterion benchmarks are not run by cargo test.
       - run: cargo test
+
+  release:
+    name: Tag and release on version bump
+    needs: [fmt, clippy, build, test]
+    # Only on a merge/push to main — never on pull_request runs.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Read version from Cargo.toml
+        id: version
+        run: |
+          version="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          if [ -z "$version" ]; then
+            echo "could not parse version from Cargo.toml" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # Idempotent: if the tag is already published this run is a no-op, so
+      # re-runs and unrelated pushes to main never double-release.
+      - name: Check whether the tag already exists
+        id: check
+        run: |
+          tag="v${{ steps.version.outputs.version }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "$tag already released — nothing to do"
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Pull the matching "## [x.y.z] - date" section out of CHANGELOG.md.
+      - name: Extract changelog section
+        if: steps.check.outputs.needed == 'true'
+        id: notes
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          awk -v v="$version" '
+            index($0, "## [" v "]") == 1 { flag = 1; next }
+            flag && /^## \[/ { exit }
+            flag { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ -s release-notes.md ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::no CHANGELOG.md section for $version — falling back to generated notes"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # gh release create makes the tag at --target as part of the release.
+      - name: Create tag and GitHub release
+        if: steps.check.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${{ steps.version.outputs.version }}"
+          if [ "${{ steps.notes.outputs.found }}" = "true" ]; then
+            notes_args=(--notes-file release-notes.md)
+          else
+            notes_args=(--generate-notes)
+          fi
+          gh release create "$tag" \
+            --target "$GITHUB_SHA" \
+            --title "$tag" \
+            --verify-tag=false \
+            "${notes_args[@]}"

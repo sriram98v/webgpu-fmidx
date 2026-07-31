@@ -32,8 +32,23 @@ jobs:
           key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-wasm-
 
+      # The CLI must match the wasm-bindgen crate exactly or the build fails
+      # with a schema-version mismatch. Read the version from Cargo.lock so a
+      # new upstream release can never silently break this job.
+      - name: Resolve wasm-bindgen version from Cargo.lock
+        id: wasm_bindgen
+        run: |
+          version="$(sed -n '/^name = "wasm-bindgen"$/{n;s/^version = "\(.*\)"$/\1/p;}' Cargo.lock | head -1)"
+          if [ -z "$version" ]; then
+            echo "could not resolve wasm-bindgen version from Cargo.lock" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Install wasm-bindgen-cli
-        run: cargo install wasm-bindgen-cli --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@${{ steps.wasm_bindgen.outputs.version }}
 
       - name: Build WASM
         run: |
@@ -47,10 +62,10 @@ jobs:
             --out-dir web/pkg
 
       # ── Node / Vite demo build ─────────────────────────────────────────────
-      - name: Set up Node 20
+      - name: Set up Node 22
         uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
 
